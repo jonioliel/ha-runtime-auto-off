@@ -13,6 +13,7 @@ from homeassistant.core import split_entity_id
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.runtime_auto_off.controller import RuntimeAutoOffController
 from custom_components.runtime_auto_off.models import RuleConfig, Status
@@ -150,10 +151,7 @@ async def test_first_due_entity_turns_every_active_selection_off(
     await hass.async_block_till_done()
 
     assert controller.deadline is not None
-    await controller._async_deadline_reached(
-        controller._timer_generation,
-        controller.deadline + timedelta(seconds=1),
-    )
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
 
     assert turn_off_recorder.calls == [LIGHT, SWITCH]
@@ -231,10 +229,8 @@ async def test_moved_entity_is_never_called(
     er.async_get(hass).async_update_entity(LIGHT, area_id=other.id)
 
     assert controller.deadline is not None
-    await controller._async_deadline_reached(
-        controller._timer_generation,
-        controller.deadline + timedelta(seconds=1),
-    )
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
 
     assert turn_off_recorder.calls == []
     assert controller.status is Status.SENSOR_UNAVAILABLE
