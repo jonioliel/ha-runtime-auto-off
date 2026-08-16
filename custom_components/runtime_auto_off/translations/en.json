@@ -1,0 +1,144 @@
+{
+  "title": "SmplWise Runtime Auto-Off",
+  "config": {
+    "flow_title": "SmplWise Runtime Auto-Off: {name}",
+    "step": {
+      "user": {
+        "title": "Create a runtime rule",
+        "description": "Choose a Home Assistant area. The area only filters the entity choices in the next step.",
+        "data": {
+          "name": "Rule name",
+          "area_id": "Room (area)"
+        },
+        "data_description": {
+          "name": "Usually the room and purpose of the rule.",
+          "area_id": "Only entities assigned to this area and supporting turn off will be offered."
+        }
+      },
+      "entities": {
+        "title": "Choose timed entities",
+        "description": "Select the entities to monitor and turn off. When ANY selected entity remains active continuously for the configured time, ALL selected entities are turned off. Unselected entities are never touched. A selected Home Assistant group may control all its members.",
+        "data": {
+          "entities": "Entities to monitor and turn off"
+        },
+        "data_description": {
+          "entities": "Active means any usable state other than off. Attribute-only changes do not restart the timer."
+        }
+      },
+      "delay": {
+        "title": "Choose the maximum continuous runtime",
+        "description": "Each selected entity gets its own continuous active-time counter. The earliest entity to reach this limit triggers one shutdown of all selected entities. There is no repeating interval; an entity must turn off and become active again to start a new cycle.",
+        "data": {
+          "delay": "Maximum continuous runtime"
+        },
+        "data_description": {
+          "delay": "How long one selected entity may remain continuously active before automatic shutdown."
+        }
+      }
+    },
+    "error": {
+      "name_required": "Enter a rule name",
+      "entities_required": "Select at least one entity",
+      "no_supported_entities": "No entities supporting turn off are assigned to this area.",
+      "entity_not_found": "A selected entity no longer exists. Choose it again.",
+      "entity_not_allowed": "Choose only enabled entities from this room that support turn off.",
+      "invalid_delay": "Choose a duration between 0 seconds and 30 days"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit the runtime rule",
+        "description": "Change the rule name or area, then select Submit to edit the selected entities.",
+        "data": {
+          "name": "Rule name",
+          "area_id": "Room (area)"
+        },
+        "data_description": {
+          "name": "Usually the room and purpose of the rule.",
+          "area_id": "Only entities assigned to this area and supporting turn off will be offered."
+        }
+      },
+      "entities": {
+        "title": "Edit timed entities",
+        "description": "These entities are both monitored and turned off. When ANY one reaches the limit, ALL selected active entities are turned off. Unselected entities are never touched. A selected group may control all its members.",
+        "data": {
+          "entities": "Entities to monitor and turn off"
+        },
+        "data_description": {
+          "entities": "Active means any usable state other than off. Attribute-only changes do not restart the timer."
+        }
+      },
+      "delay": {
+        "title": "Edit the maximum continuous runtime",
+        "description": "The counter starts when an entity becomes active and stops when it turns off. The rule is event-driven and does not run on a repeating interval.",
+        "data": {
+          "delay": "Maximum continuous runtime"
+        },
+        "data_description": {
+          "delay": "How long one selected entity may remain continuously active before automatic shutdown."
+        }
+      }
+    },
+    "error": {
+      "name_required": "Enter a rule name",
+      "entities_required": "Select at least one entity",
+      "no_supported_entities": "No entities supporting turn off are assigned to this area.",
+      "entity_not_found": "A selected entity no longer exists. Choose it again.",
+      "entity_not_allowed": "Choose only enabled entities from this room that support turn off.",
+      "invalid_delay": "Choose a duration between 0 seconds and 30 days"
+    }
+  },
+  "entity": {
+    "switch": {
+      "enabled": {
+        "name": "Automatic runtime shutdown"
+      }
+    },
+    "binary_sensor": {
+      "any_active": {
+        "name": "Any selected entity active"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "initializing": "Initializing",
+          "disabled": "Disabled",
+          "idle": "All selected entities are off",
+          "countdown": "Counting continuous runtime",
+          "executing": "Turning selected entities off",
+          "completed": "Runtime shutdown completed",
+          "sensor_unavailable": "Selected entities unavailable",
+          "error": "Error"
+        }
+      },
+      "trigger_entity": {
+        "name": "Entity reaching the limit first"
+      },
+      "next_shutdown": {
+        "name": "Scheduled runtime shutdown"
+      },
+      "last_shutdown": {
+        "name": "Last executed shutdown"
+      }
+    },
+    "event": {
+      "activity": {
+        "name": "Rule activity",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "scheduled": "Shutdown scheduled",
+              "cancelled": "Countdown cancelled",
+              "executed": "Shutdown executed",
+              "no_action": "No action needed",
+              "failed": "Shutdown failed"
+            }
+          }
+        }
+      }
+    }
+  }
+}

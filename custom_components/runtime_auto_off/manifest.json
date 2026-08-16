@@ -1,0 +1,12 @@
+{
+  "domain": "runtime_auto_off",
+  "name": "SmplWise Runtime Auto-Off",
+  "codeowners": ["@jonioliel"],
+  "config_flow": true,
+  "documentation": "https://github.com/jonioliel/ha-runtime-auto-off",
+  "integration_type": "device",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/jonioliel/ha-runtime-auto-off/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
