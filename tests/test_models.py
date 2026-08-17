@@ -35,7 +35,10 @@ def test_rule_config_normalizes_and_round_trips() -> None:
 
 def test_cycle_and_execution_round_trip() -> None:
     now = datetime(2026, 8, 16, 10, 0, tzinfo=UTC)
-    cycle = RuntimeCycle("registry-id", "light.main", now, handled=True)
+    retry_at = datetime(2026, 8, 16, 10, 10, tzinfo=UTC)
+    cycle = RuntimeCycle(
+        "registry-id", "light.main", now, handled=True, retry_at=retry_at
+    )
     execution = LastExecution(
         "light.main",
         now,
@@ -45,6 +48,7 @@ def test_cycle_and_execution_round_trip() -> None:
     )
 
     assert RuntimeCycle.from_dict(cycle.as_dict()) == cycle
+    assert cycle.deadline(60) == retry_at
     assert LastExecution.from_dict(execution.as_dict()) == execution
     assert execution.succeeded
 

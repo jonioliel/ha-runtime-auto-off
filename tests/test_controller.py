@@ -31,6 +31,7 @@ class TurnOffRecorder:
     hass: HomeAssistant
     calls: list[str] = field(default_factory=list)
     failures: set[str] = field(default_factory=set)
+    ignored: set[str] = field(default_factory=set)
 
     async def async_handle(self, call: ServiceCall) -> None:
         entity_id = call.data[ATTR_ENTITY_ID]
@@ -38,7 +39,8 @@ class TurnOffRecorder:
         self.calls.append(entity_id)
         if entity_id in self.failures:
             raise HomeAssistantError("simulated failure")
-        self.hass.states.async_set(entity_id, STATE_OFF)
+        if entity_id not in self.ignored:
+            self.hass.states.async_set(entity_id, STATE_OFF)
 
 
 type ControllerFactory = Callable[
@@ -174,29 +176,106 @@ async def test_already_off_selection_is_not_called(
     assert controller.last_execution.skipped_entities == {SWITCH: "already_off"}
 
 
-async def test_failed_active_cycle_does_not_repeat_until_off_then_on(
+async def test_failed_active_cycle_retries_after_configured_interval(
     hass: HomeAssistant,
     controller_factory: ControllerFactory,
     turn_off_recorder: TurnOffRecorder,
 ) -> None:
     turn_off_recorder.failures.add(LIGHT)
     hass.states.async_set(LIGHT, STATE_ON)
-    controller = await controller_factory(_config(delay=0, entities=(LIGHT,)))
+    active_state = hass.states.get(LIGHT)
+    assert active_state is not None
+    controller = await controller_factory(_config(delay=600, entities=(LIGHT,)))
 
+    first_deadline = active_state.last_changed + timedelta(minutes=10)
+    async_fire_time_changed(hass, first_deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
     assert turn_off_recorder.calls == [LIGHT]
-    assert controller.status is Status.ERROR
-    assert controller.deadline is None
+    assert controller.status is Status.COUNTDOWN
+    assert controller.deadline == first_deadline + timedelta(minutes=10, seconds=1)
+    assert controller.last_execution is not None
+    assert controller.last_execution.failed_entities == {LIGHT: "HomeAssistantError"}
+    active_cycles = controller.diagnostics["active_cycles"]
+    assert len(active_cycles) == 1
+    assert active_cycles[0]["started_at"] == active_state.last_changed.isoformat()
+    assert active_cycles[0]["retry_at"] == controller.deadline.isoformat()
 
     hass.states.async_set(LIGHT, STATE_ON, {"brightness": 50})
     await hass.async_block_till_done()
     assert turn_off_recorder.calls == [LIGHT]
-    assert controller.deadline is None
+    assert controller.deadline == first_deadline + timedelta(minutes=10, seconds=1)
 
-    hass.states.async_set(LIGHT, STATE_OFF)
-    await hass.async_block_till_done()
-    hass.states.async_set(LIGHT, STATE_ON)
+    turn_off_recorder.failures.remove(LIGHT)
+    assert controller.deadline is not None
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
     assert turn_off_recorder.calls == [LIGHT, LIGHT]
+    assert hass.states.get(LIGHT) is not None
+    assert hass.states.get(LIGHT).state == STATE_OFF
+    assert controller.deadline is None
+
+
+async def test_partial_failure_retries_only_the_entity_still_active(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    turn_off_recorder.failures.add(SWITCH)
+    hass.states.async_set(LIGHT, STATE_ON)
+    hass.states.async_set(SWITCH, STATE_ON)
+    controller = await controller_factory(_config(delay=60))
+
+    assert controller.deadline is not None
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT, SWITCH]
+    assert hass.states.get(LIGHT) is not None
+    assert hass.states.get(LIGHT).state == STATE_OFF
+    assert hass.states.get(SWITCH) is not None
+    assert hass.states.get(SWITCH).state == STATE_ON
+    retry_deadline = controller.deadline
+    assert retry_deadline is not None
+
+    turn_off_recorder.failures.remove(SWITCH)
+    async_fire_time_changed(hass, retry_deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT, SWITCH, SWITCH]
+    assert hass.states.get(SWITCH) is not None
+    assert hass.states.get(SWITCH).state == STATE_OFF
+    assert controller.deadline is None
+
+
+async def test_unconfirmed_turn_off_is_failed_and_retried(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    turn_off_recorder.ignored.add(LIGHT)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(_config(delay=60, entities=(LIGHT,)))
+
+    assert controller.deadline is not None
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT]
+    assert controller.last_execution is not None
+    assert controller.last_execution.failed_entities == {
+        LIGHT: "turn_off_not_confirmed"
+    }
+    retry_deadline = controller.deadline
+    assert retry_deadline is not None
+
+    turn_off_recorder.ignored.remove(LIGHT)
+    async_fire_time_changed(hass, retry_deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT, LIGHT]
+    assert hass.states.get(LIGHT) is not None
+    assert hass.states.get(LIGHT).state == STATE_OFF
+    assert controller.deadline is None
 
 
 async def test_handled_cycle_does_not_replay_after_restart(
@@ -215,6 +294,35 @@ async def test_handled_cycle_does_not_replay_after_restart(
     assert restarted.status is Status.COMPLETED
     assert restarted.deadline is None
     assert turn_off_recorder.calls == [LIGHT]
+
+
+async def test_retry_deadline_survives_restart(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    turn_off_recorder.failures.add(LIGHT)
+    hass.states.async_set(LIGHT, STATE_ON)
+    config = _config(delay=600, entities=(LIGHT,))
+    first = await controller_factory(config, "retry-restart-entry")
+    assert first.deadline is not None
+    async_fire_time_changed(hass, first.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    retry_deadline = first.deadline
+    assert retry_deadline is not None
+    assert turn_off_recorder.calls == [LIGHT]
+    await first.async_unload()
+
+    restarted = await controller_factory(config, "retry-restart-entry")
+    assert restarted.status is Status.COUNTDOWN
+    assert restarted.deadline == retry_deadline
+    turn_off_recorder.failures.remove(LIGHT)
+    async_fire_time_changed(hass, retry_deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT, LIGHT]
+    assert hass.states.get(LIGHT) is not None
+    assert hass.states.get(LIGHT).state == STATE_OFF
 
 
 async def test_moved_entity_is_never_called(

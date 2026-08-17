@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
@@ -134,11 +134,20 @@ class RuntimeCycle:
     entity_id: str
     started_at: datetime
     handled: bool = False
+    retry_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.stable_key or not self.entity_id or self.started_at.tzinfo is None:
             raise ValueError("A cycle requires identity and timezone-aware time")
         object.__setattr__(self, "started_at", dt_util.as_utc(self.started_at))
+        if self.retry_at is not None:
+            if self.retry_at.tzinfo is None:
+                raise ValueError("A retry time must be timezone-aware")
+            object.__setattr__(self, "retry_at", dt_util.as_utc(self.retry_at))
+
+    def deadline(self, delay_seconds: float) -> datetime:
+        """Return the next initial or retry shutdown deadline."""
+        return self.retry_at or self.started_at + timedelta(seconds=delay_seconds)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +155,7 @@ class RuntimeCycle:
             "entity_id": self.entity_id,
             "started_at": self.started_at.isoformat(),
             "handled": self.handled,
+            "retry_at": self.retry_at.isoformat() if self.retry_at else None,
         }
 
     @classmethod
@@ -155,7 +165,17 @@ class RuntimeCycle:
         started_at = _parse_datetime(data.get("started_at"))
         if key is None or entity_id is None or started_at is None:
             return None
-        return cls(key, entity_id, started_at, data.get("handled") is True)
+        raw_retry_at = data.get("retry_at")
+        retry_at = _parse_datetime(raw_retry_at)
+        if raw_retry_at is not None and retry_at is None:
+            return None
+        return cls(
+            key,
+            entity_id,
+            started_at,
+            data.get("handled") is True,
+            retry_at,
+        )
 
 
 @dataclass(frozen=True, slots=True)

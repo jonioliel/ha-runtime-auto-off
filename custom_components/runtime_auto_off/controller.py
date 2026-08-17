@@ -67,11 +67,13 @@ class _ExecutionPlan:
     trigger_key: str
     trigger_entity: str
     trigger_started_at: datetime
+    claimed_at: datetime
+    is_retry: bool
     target_entities: tuple[str, ...]
 
 
 class RuntimeAutoOffController:
-    """Track continuous active time and shut selected entities down once."""
+    """Track continuous active time and retry shutdowns that leave entities on."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str, config: RuleConfig) -> None:
         if not config.entities:
@@ -206,7 +208,9 @@ class RuntimeAutoOffController:
                 self._unloaded = False
                 self._restore_locked(stored)
                 self._sync_cycles_locked()
-                plan, activity = self._reconcile_locked(dt_util.utcnow())
+                now = dt_util.utcnow()
+                self._rearm_interrupted_cycles_locked(now)
+                plan, activity = self._reconcile_locked(now)
                 self._setup_complete = True
                 await self._async_save_locked(force=True)
                 self._action_inhibited = not self._enabled
@@ -364,11 +368,9 @@ class RuntimeAutoOffController:
 
         trigger = min(
             pending,
-            key=lambda cycle: (
-                cycle.started_at + timedelta(seconds=self.config.delay_seconds)
-            ),
+            key=lambda cycle: cycle.deadline(self.config.delay_seconds),
         )
-        deadline = trigger.started_at + timedelta(seconds=self.config.delay_seconds)
+        deadline = trigger.deadline(self.config.delay_seconds)
         self._trigger_entity = trigger.entity_id
         if now < deadline:
             changed = self._next_deadline != deadline
@@ -381,6 +383,7 @@ class RuntimeAutoOffController:
                         "trigger_entity": trigger.entity_id,
                         "started_at": trigger.started_at.isoformat(),
                         "deadline": deadline.isoformat(),
+                        "is_retry": trigger.retry_at is not None,
                     },
                 )
                 if changed
@@ -401,6 +404,8 @@ class RuntimeAutoOffController:
                 trigger_key=trigger.stable_key,
                 trigger_entity=trigger.entity_id,
                 trigger_started_at=trigger.started_at,
+                claimed_at=now,
+                is_retry=trigger.retry_at is not None,
                 target_entities=self.config.entities,
             ),
             None,
@@ -458,9 +463,16 @@ class RuntimeAutoOffController:
                     exc_info=True,
                 )
             else:
-                successful.append(entity_id)
+                post_error = self._target_runtime_error(entity_id)
+                if post_error == "already_off":
+                    successful.append(entity_id)
+                elif post_error is None:
+                    failed[entity_id] = "turn_off_not_confirmed"
+                else:
+                    failed[entity_id] = f"post_turn_off_{post_error}"
 
         occurred_at = dt_util.utcnow()
+        retry_base = max(occurred_at, plan.claimed_at)
         execution = LastExecution(
             trigger_entity=plan.trigger_entity,
             occurred_at=occurred_at,
@@ -468,7 +480,11 @@ class RuntimeAutoOffController:
             skipped_entities=skipped,
             failed_entities=failed,
         )
+        followup_plan: _ExecutionPlan | None = None
+        followup_activity: ActivityEvent | None = None
         async with self._lock:
+            self._sync_cycles_locked()
+            self._rearm_interrupted_cycles_locked(retry_base)
             self._last_execution = execution
             self._status = Status.ERROR if failed else Status.COMPLETED
             event_type = (
@@ -480,16 +496,19 @@ class RuntimeAutoOffController:
                     else ActivityEventType.NO_ACTION
                 )
             )
-            activity = self._new_activity_locked(
+            execution_activity = self._new_activity_locked(
                 event_type,
                 {
                     "trigger_entity": plan.trigger_entity,
                     "trigger_started_at": plan.trigger_started_at.isoformat(),
+                    "is_retry": plan.is_retry,
                     "successful_entities": list(successful),
                     "skipped_entities": dict(skipped),
                     "failed_entities": dict(failed),
                 },
             )
+            if self._cycles and self.config.delay_seconds > 0 and not self._unloaded:
+                followup_plan, followup_activity = self._reconcile_locked(retry_base)
             try:
                 await self._async_save_locked(force=True)
             except Exception:
@@ -499,7 +518,26 @@ class RuntimeAutoOffController:
                     exc_info=True,
                 )
         self._notify_state_listeners()
-        self._publish_activity(activity)
+        self._publish_activity(execution_activity)
+        if followup_activity is not None:
+            self._publish_activity(followup_activity)
+        if followup_plan is not None:
+            await self._async_execute_serialized(followup_plan)
+
+    def _rearm_interrupted_cycles_locked(self, now: datetime) -> bool:
+        """Schedule another check for active cycles claimed by an earlier attempt."""
+        if self.config.delay_seconds <= 0:
+            return False
+        retry_at = now + timedelta(seconds=self.config.delay_seconds)
+        rearmed = False
+        updated: dict[str, RuntimeCycle] = {}
+        for key, cycle in self._cycles.items():
+            if cycle.handled:
+                cycle = replace(cycle, handled=False, retry_at=retry_at)
+                rearmed = True
+            updated[key] = cycle
+        self._cycles = updated
+        return rearmed
 
     def _sync_cycles_locked(
         self, event: Event[EventStateChangedData] | None = None

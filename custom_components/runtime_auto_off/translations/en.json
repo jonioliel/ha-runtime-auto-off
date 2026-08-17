@@ -27,7 +27,7 @@
       },
       "delay": {
         "title": "Choose the maximum continuous runtime",
-        "description": "Each selected entity gets its own continuous active-time counter. The earliest entity to reach this limit triggers one shutdown of all selected entities. There is no repeating interval; an entity must turn off and become active again to start a new cycle.",
+        "description": "Each selected entity gets its own continuous active-time counter. The earliest entity to reach this limit triggers shutdown of all selected active entities. If an entity remains active, it is checked and retried after this same duration until it turns off. A duration of 0 seconds remains a single attempt to prevent a continuous service loop.",
         "data": {
           "delay": "Maximum continuous runtime"
         },
@@ -71,7 +71,7 @@
       },
       "delay": {
         "title": "Edit the maximum continuous runtime",
-        "description": "The counter starts when an entity becomes active and stops when it turns off. The rule is event-driven and does not run on a repeating interval.",
+        "description": "The counter starts when an entity becomes active and stops when it turns off. If a shutdown fails or is not confirmed, the entity is checked and retried after this same duration. Retry deadlines survive restarts.",
         "data": {
           "delay": "Maximum continuous runtime"
         },

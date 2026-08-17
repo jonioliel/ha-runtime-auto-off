@@ -21,10 +21,13 @@
 2. מעבר מ־`off` למצב פעיל פותח מחזור ומחשב מועד כיבוי לפי הזמן שהוגדר.
 3. עדכון מאפיינים או מעבר בין שני מצבים פעילים אינו מאפס את הספירה.
 4. כיבוי הרכיב לפני המועד מבטל את המחזור שלו.
-5. הרכיב הראשון שמגיע לזמן המרבי מפעיל ניסיון כיבוי אחד לכל הרכיבים
+5. הרכיב הראשון שמגיע לזמן המרבי מפעיל ניסיון כיבוי לכל הרכיבים
    הפעילים שנבחרו.
-6. אין interval ואין כיבוי חוזר. רכיב שנשאר פעיל לאחר ניסיון כושל לא יגרום
-   לניסיון נוסף עד שיעבור ל־`off` ואז יהפוך שוב לפעיל.
+6. אם רכיב נשאר פעיל לאחר ניסיון הכיבוי, האינטגרציה מתזמנת בדיקה נוספת
+   לאחר אותו זמן שהוגדר ומנסה לכבות שוב את הרכיבים שעדיין פעילים.
+7. שעת ההדלקה המקורית אינה מתאפסת בין הניסיונות. הבדיקה החוזרת נמשכת
+   בכל מרווח זמן מוגדר עד שהרכיב נכבה. זמן של 0 שניות נשאר כיבוי חד־פעמי
+   כדי למנוע לולאת שירות רציפה.
 
 לדוגמה: אם נבחרו טלוויזיה, תאורה ומזגן והזמן הוא שעה, מספיק שאחד מהם
 יהיה פעיל ברציפות שעה כדי שכל שלושת הרכיבים הפעילים יכובו.
@@ -60,6 +63,8 @@
 
 SmplWise Runtime Auto-Off monitors explicitly selected, area-scoped entities.
 Each entity has an independent continuous-active timer. When any selected entity
-reaches the configured duration, all selected active entities are turned off once.
-The integration is event-driven, does not repeat on an interval, creates one
-first-class Home Assistant device per rule, and supports full UI editing.
+reaches the configured duration, all selected active entities receive a shutdown
+command. Any entity that remains active is checked and retried after the same
+configured duration. Retry deadlines survive restarts, and service success is
+accepted only when Home Assistant confirms the entity is off. The integration
+creates one first-class Home Assistant device per rule and supports full UI editing.
