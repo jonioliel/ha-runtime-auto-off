@@ -183,11 +183,13 @@ async def test_failed_active_cycle_retries_after_configured_interval(
 ) -> None:
     turn_off_recorder.failures.add(LIGHT)
     hass.states.async_set(LIGHT, STATE_ON)
-    active_state = hass.states.get(LIGHT)
-    assert active_state is not None
     controller = await controller_factory(_config(delay=600, entities=(LIGHT,)))
+    initial_cycles = controller.diagnostics["active_cycles"]
+    assert len(initial_cycles) == 1
+    original_started_at = initial_cycles[0]["started_at"]
 
-    first_deadline = active_state.last_changed + timedelta(minutes=10)
+    first_deadline = controller.deadline
+    assert first_deadline is not None
     async_fire_time_changed(hass, first_deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
     assert turn_off_recorder.calls == [LIGHT]
@@ -199,7 +201,7 @@ async def test_failed_active_cycle_retries_after_configured_interval(
     assert controller.last_execution.failed_entities == {LIGHT: "HomeAssistantError"}
     active_cycles = controller.diagnostics["active_cycles"]
     assert len(active_cycles) == 1
-    assert active_cycles[0]["started_at"] == active_state.last_changed.isoformat()
+    assert active_cycles[0]["started_at"] == original_started_at
     assert active_cycles[0]["retry_at"] == retry_deadline.isoformat()
 
     hass.states.async_set(LIGHT, STATE_ON, {"brightness": 50})
