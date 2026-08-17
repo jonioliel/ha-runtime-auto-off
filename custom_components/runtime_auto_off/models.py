@@ -16,6 +16,7 @@ from .const import (
     CONF_DELAY_SECONDS,
     CONF_ENTITIES,
     CONF_NAME,
+    CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_NAME,
@@ -98,6 +99,15 @@ class RuleConfig:
     entities: tuple[str, ...]
     delay_seconds: float
     rule_id: str = ""
+    retry_interval_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        retry_interval = (
+            self.delay_seconds
+            if self.retry_interval_seconds is None
+            else self.retry_interval_seconds
+        )
+        object.__setattr__(self, "retry_interval_seconds", retry_interval)
 
     @classmethod
     def from_mapping(cls, options: Mapping[str, Any]) -> Self:
@@ -108,12 +118,24 @@ class RuleConfig:
             delay = math.nan
         if not math.isfinite(delay):
             delay = float(DEFAULT_DELAY_SECONDS)
+        raw_retry_interval = options.get(CONF_RETRY_INTERVAL_SECONDS, delay)
+        try:
+            retry_interval = (
+                float(raw_retry_interval)
+                if not isinstance(raw_retry_interval, bool)
+                else math.nan
+            )
+        except (TypeError, ValueError):
+            retry_interval = math.nan
+        if not math.isfinite(retry_interval):
+            retry_interval = delay
         return cls(
             name=_optional_string(options.get(CONF_NAME)) or DEFAULT_NAME,
             area_id=_optional_string(options.get(CONF_AREA_ID)),
             entities=_string_sequence(options.get(CONF_ENTITIES)),
             delay_seconds=max(0.0, delay),
             rule_id=_optional_string(options.get(CONF_RULE_ID)) or "",
+            retry_interval_seconds=max(0.0, retry_interval),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -122,6 +144,7 @@ class RuleConfig:
             CONF_AREA_ID: self.area_id,
             CONF_ENTITIES: list(self.entities),
             CONF_DELAY_SECONDS: self.delay_seconds,
+            CONF_RETRY_INTERVAL_SECONDS: self.retry_interval_seconds,
             CONF_RULE_ID: self.rule_id,
         }
 

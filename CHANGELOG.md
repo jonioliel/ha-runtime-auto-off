@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] - 2026-08-17
+
+### Added
+
+- A separate retry/check interval, independently configurable from the maximum
+  continuous runtime.
+- Backward-compatible options defaults: existing rules initially keep their prior
+  behavior until the new retry interval is edited.
+
 ## [1.1.0] - 2026-08-17
 
 ### Added
@@ -26,5 +35,6 @@
 - English and Hebrew configuration, entity, status, and event translations.
 - HACS metadata, diagnostics, tests, Ruff, Hassfest, and HACS validation workflows.
 
+[1.2.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.0.0

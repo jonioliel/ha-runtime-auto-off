@@ -4,7 +4,8 @@
 
 בוחרים Area ורשימה מפורשת של רכיבים. לכל רכיב נבחר יש ספירה עצמאית
 מהרגע שבו הוא עובר מ־`off` למצב פעיל. כאשר אחד מהם נשאר פעיל ברציפות
-במשך הזמן שהוגדר, האינטגרציה מכבה את כל הרכיבים הפעילים שנבחרו.
+במשך הזמן שהוגדר, האינטגרציה מכבה את כל הרכיבים הפעילים שנבחרו. אם רכיב
+נשאר פעיל, מרווח בדיקה נפרד קובע מתי יתבצע ניסיון נוסף.
 
 ## עקרונות בטיחות
 
@@ -24,13 +25,16 @@
 5. הרכיב הראשון שמגיע לזמן המרבי מפעיל ניסיון כיבוי לכל הרכיבים
    הפעילים שנבחרו.
 6. אם רכיב נשאר פעיל לאחר ניסיון הכיבוי, האינטגרציה מתזמנת בדיקה נוספת
-   לאחר אותו זמן שהוגדר ומנסה לכבות שוב את הרכיבים שעדיין פעילים.
+   לפי מרווח הבדיקה הנפרד ומנסה לכבות שוב את הרכיבים שעדיין פעילים.
 7. שעת ההדלקה המקורית אינה מתאפסת בין הניסיונות. הבדיקה החוזרת נמשכת
-   בכל מרווח זמן מוגדר עד שהרכיב נכבה. זמן של 0 שניות נשאר כיבוי חד־פעמי
-   כדי למנוע לולאת שירות רציפה.
+   בכל מרווח בדיקה מוגדר עד שהרכיב נכבה.
 
 לדוגמה: אם נבחרו טלוויזיה, תאורה ומזגן והזמן הוא שעה, מספיק שאחד מהם
 יהיה פעיל ברציפות שעה כדי שכל שלושת הרכיבים הפעילים יכובו.
+
+אפשר, לדוגמה, להגדיר כיבוי ראשון לאחר 45 דקות ומרווח בדיקה חוזרת של
+5 דקות. במקרה כזה רכיב שנשאר פעיל ייבדק שוב כל 5 דקות, בלי לאפס את
+45 הדקות שבהן היה פעיל מלכתחילה.
 
 ## ישויות לכל Device
 
@@ -43,7 +47,7 @@
 - Event entity לפעילות: תזמון, ביטול, ביצוע, אין פעולה או כשל.
 
 ה־Device כולל קישור ישיר להגדרות האינטגרציה, ולכן אפשר לערוך ממנו את
-החדר, הרכיבים והזמן.
+החדר, הרכיבים ושני הזמנים.
 
 ## התקנה דרך HACS
 
@@ -64,7 +68,8 @@
 SmplWise Runtime Auto-Off monitors explicitly selected, area-scoped entities.
 Each entity has an independent continuous-active timer. When any selected entity
 reaches the configured duration, all selected active entities receive a shutdown
-command. Any entity that remains active is checked and retried after the same
-configured duration. Retry deadlines survive restarts, and service success is
-accepted only when Home Assistant confirms the entity is off. The integration
+command. Any entity that remains active is checked and retried after the
+configured retry interval, which is independent from the initial runtime limit.
+Retry deadlines survive restarts, and service success is accepted only when Home
+Assistant confirms the entity is off. The integration
 creates one first-class Home Assistant device per rule and supports full UI editing.

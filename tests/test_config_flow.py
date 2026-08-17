@@ -7,13 +7,18 @@ from homeassistant.const import SERVICE_TURN_OFF
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.runtime_auto_off.config_flow import CONF_DELAY
+from custom_components.runtime_auto_off.config_flow import (
+    CONF_DELAY,
+    CONF_RETRY_INTERVAL,
+)
 from custom_components.runtime_auto_off.const import (
     CONF_AREA_ID,
     CONF_DELAY_SECONDS,
     CONF_ENTITIES,
     CONF_NAME,
+    CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
     DOMAIN,
 )
@@ -73,9 +78,24 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
     )
     assert result["step_id"] == "delay"
     assert _schema_default(result, CONF_DELAY) == {"hours": 1}
+    assert _schema_default(result, CONF_RETRY_INTERVAL) == {"minutes": 5}
 
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_DELAY: {"minutes": 45}}
+        result["flow_id"],
+        {
+            CONF_DELAY: {"minutes": 45},
+            CONF_RETRY_INTERVAL: {"seconds": 0},
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_RETRY_INTERVAL: "invalid_retry_interval"}
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_DELAY: {"minutes": 45},
+            CONF_RETRY_INTERVAL: {"minutes": 5},
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
@@ -83,6 +103,59 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
     assert entry.options[CONF_AREA_ID] == room.id
     assert entry.options[CONF_ENTITIES] == [room_light.id]
     assert entry.options[CONF_DELAY_SECONDS] == 2700
+    assert entry.options[CONF_RETRY_INTERVAL_SECONDS] == 300
+
+
+async def test_old_options_default_retry_interval_to_existing_shutdown_time(
+    hass: HomeAssistant,
+) -> None:
+    async def async_turn_off(_call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("light", SERVICE_TURN_OFF, async_turn_off)
+    room = ar.async_get(hass).async_create("Legacy room")
+    registry = er.async_get(hass)
+    light = registry.async_get_or_create(
+        "light", "test", "legacy-light", suggested_object_id="legacy_light"
+    )
+    light = registry.async_update_entity(light.entity_id, area_id=room.id)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Legacy rule",
+        unique_id="legacy-rule",
+        data={CONF_RULE_ID: "legacy-rule"},
+        options={
+            CONF_NAME: "Legacy rule",
+            CONF_AREA_ID: room.id,
+            CONF_ENTITIES: [light.id],
+            CONF_DELAY_SECONDS: 2700,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_NAME: "Legacy rule", CONF_AREA_ID: room.id}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITIES: [light.entity_id]}
+    )
+
+    assert result["step_id"] == "delay"
+    assert _schema_default(result, CONF_DELAY) == {"minutes": 45}
+    assert _schema_default(result, CONF_RETRY_INTERVAL) == {"minutes": 45}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_DELAY: {"minutes": 45},
+            CONF_RETRY_INTERVAL: {"minutes": 5},
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_DELAY_SECONDS] == 2700
+    assert entry.options[CONF_RETRY_INTERVAL_SECONDS] == 300
 
 
 async def test_empty_area_never_exposes_an_unrestricted_picker(

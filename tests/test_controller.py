@@ -108,9 +108,14 @@ async def controller_factory(
 
 
 def _config(
-    *, delay: float = 600, entities: tuple[str, ...] = (LIGHT, SWITCH)
+    *,
+    delay: float = 600,
+    retry_interval: float | None = None,
+    entities: tuple[str, ...] = (LIGHT, SWITCH),
 ) -> RuleConfig:
-    return RuleConfig("Test room", AREA_ID, entities, delay, "test-rule")
+    return RuleConfig(
+        "Test room", AREA_ID, entities, delay, "test-rule", retry_interval
+    )
 
 
 async def test_countdown_follows_continuous_active_transition(
@@ -183,7 +188,9 @@ async def test_failed_active_cycle_retries_after_configured_interval(
 ) -> None:
     turn_off_recorder.failures.add(LIGHT)
     hass.states.async_set(LIGHT, STATE_ON)
-    controller = await controller_factory(_config(delay=600, entities=(LIGHT,)))
+    controller = await controller_factory(
+        _config(delay=2700, retry_interval=300, entities=(LIGHT,))
+    )
     initial_cycles = controller.diagnostics["active_cycles"]
     assert len(initial_cycles) == 1
     original_started_at = initial_cycles[0]["started_at"]
@@ -196,7 +203,8 @@ async def test_failed_active_cycle_retries_after_configured_interval(
     assert controller.status is Status.COUNTDOWN
     retry_deadline = controller.deadline
     assert retry_deadline is not None
-    assert retry_deadline >= first_deadline + timedelta(minutes=10)
+    assert retry_deadline >= first_deadline + timedelta(minutes=5)
+    assert retry_deadline <= first_deadline + timedelta(minutes=5, seconds=2)
     assert controller.last_execution is not None
     assert controller.last_execution.failed_entities == {LIGHT: "HomeAssistantError"}
     active_cycles = controller.diagnostics["active_cycles"]

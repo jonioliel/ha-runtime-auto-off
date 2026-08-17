@@ -507,7 +507,11 @@ class RuntimeAutoOffController:
                     "failed_entities": dict(failed),
                 },
             )
-            if self._cycles and self.config.delay_seconds > 0 and not self._unloaded:
+            if (
+                self._cycles
+                and self.config.retry_interval_seconds > 0
+                and not self._unloaded
+            ):
                 followup_plan, followup_activity = self._reconcile_locked(retry_base)
             try:
                 await self._async_save_locked(force=True)
@@ -526,9 +530,9 @@ class RuntimeAutoOffController:
 
     def _rearm_interrupted_cycles_locked(self, now: datetime) -> bool:
         """Schedule another check for active cycles claimed by an earlier attempt."""
-        if self.config.delay_seconds <= 0:
+        if self.config.retry_interval_seconds <= 0:
             return False
-        retry_at = now + timedelta(seconds=self.config.delay_seconds)
+        retry_at = now + timedelta(seconds=self.config.retry_interval_seconds)
         rearmed = False
         updated: dict[str, RuntimeCycle] = {}
         for key, cycle in self._cycles.items():

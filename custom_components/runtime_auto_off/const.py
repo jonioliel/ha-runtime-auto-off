@@ -8,10 +8,12 @@ CONF_NAME: Final = "name"
 CONF_AREA_ID: Final = "area_id"
 CONF_ENTITIES: Final = "entities"
 CONF_DELAY_SECONDS: Final = "delay_seconds"
+CONF_RETRY_INTERVAL_SECONDS: Final = "retry_interval_seconds"
 CONF_RULE_ID: Final = "rule_id"
 
 DEFAULT_NAME: Final = "Runtime Auto-Off"
 DEFAULT_DELAY_SECONDS: Final = 3600
+DEFAULT_RETRY_INTERVAL_SECONDS: Final = 300
 DEFAULT_ENABLED: Final = True
 
 STORAGE_VERSION: Final = 1

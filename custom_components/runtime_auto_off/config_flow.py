@@ -33,13 +33,16 @@ from .const import (
     CONF_DELAY_SECONDS,
     CONF_ENTITIES,
     CONF_NAME,
+    CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
     DEFAULT_DELAY_SECONDS,
+    DEFAULT_RETRY_INTERVAL_SECONDS,
     DOMAIN,
 )
 from .helpers import effective_area_id
 
 CONF_DELAY = "delay"
+CONF_RETRY_INTERVAL = "retry_interval"
 MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 
 
@@ -173,7 +176,18 @@ class _RuleFlowMixin:
                     ),
                 ): DurationSelector(
                     DurationSelectorConfig(enable_day=True, enable_second=True)
-                )
+                ),
+                vol.Required(
+                    CONF_RETRY_INTERVAL,
+                    default=_seconds_to_duration(
+                        self._working.get(
+                            CONF_RETRY_INTERVAL_SECONDS,
+                            DEFAULT_RETRY_INTERVAL_SECONDS,
+                        )
+                    ),
+                ): DurationSelector(
+                    DurationSelectorConfig(enable_day=True, enable_second=True)
+                ),
             }
         )
 
@@ -209,7 +223,11 @@ class _RuleFlowMixin:
         delay = _duration_to_seconds(user_input[CONF_DELAY])
         if delay < 0 or delay > MAX_DELAY_SECONDS:
             return {CONF_DELAY: "invalid_delay"}
+        retry_interval = _duration_to_seconds(user_input[CONF_RETRY_INTERVAL])
+        if retry_interval <= 0 or retry_interval > MAX_DELAY_SECONDS:
+            return {CONF_RETRY_INTERVAL: "invalid_retry_interval"}
         self._working[CONF_DELAY_SECONDS] = delay
+        self._working[CONF_RETRY_INTERVAL_SECONDS] = retry_interval
         return {}
 
 
@@ -292,6 +310,10 @@ class RuntimeAutoOffOptionsFlow(_RuleFlowMixin, OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         if not self._working:
             self._working = dict(self.config_entry.options)
+            self._working.setdefault(
+                CONF_RETRY_INTERVAL_SECONDS,
+                self._working.get(CONF_DELAY_SECONDS, DEFAULT_RETRY_INTERVAL_SECONDS),
+            )
         errors: dict[str, str] = {}
         if user_input is not None:
             errors = self._accept_room(user_input)
