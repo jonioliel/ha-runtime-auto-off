@@ -18,9 +18,24 @@ from .const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_TRIGGER_POLICY,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_NAME,
 )
+
+
+class TriggerPolicy(StrEnum):
+    """Which active entity deadline triggers the first shutdown batch."""
+
+    FIRST = "first"
+    LAST = "last"
+
+
+class ShutdownKind(StrEnum):
+    """Whether a scheduled shutdown is an initial attempt or a retry."""
+
+    INITIAL = "initial"
+    RETRY = "retry"
 
 
 class Status(StrEnum):
@@ -100,6 +115,7 @@ class RuleConfig:
     delay_seconds: float
     rule_id: str = ""
     retry_interval_seconds: float | None = None
+    trigger_policy: TriggerPolicy = TriggerPolicy.FIRST
 
     def __post_init__(self) -> None:
         retry_interval = (
@@ -108,6 +124,11 @@ class RuleConfig:
             else self.retry_interval_seconds
         )
         object.__setattr__(self, "retry_interval_seconds", retry_interval)
+        try:
+            trigger_policy = TriggerPolicy(self.trigger_policy)
+        except (TypeError, ValueError):
+            trigger_policy = TriggerPolicy.FIRST
+        object.__setattr__(self, "trigger_policy", trigger_policy)
 
     @classmethod
     def from_mapping(cls, options: Mapping[str, Any]) -> Self:
@@ -129,6 +150,10 @@ class RuleConfig:
             retry_interval = math.nan
         if not math.isfinite(retry_interval):
             retry_interval = delay
+        try:
+            trigger_policy = TriggerPolicy(options.get(CONF_TRIGGER_POLICY))
+        except (TypeError, ValueError):
+            trigger_policy = TriggerPolicy.FIRST
         return cls(
             name=_optional_string(options.get(CONF_NAME)) or DEFAULT_NAME,
             area_id=_optional_string(options.get(CONF_AREA_ID)),
@@ -136,6 +161,7 @@ class RuleConfig:
             delay_seconds=max(0.0, delay),
             rule_id=_optional_string(options.get(CONF_RULE_ID)) or "",
             retry_interval_seconds=max(0.0, retry_interval),
+            trigger_policy=trigger_policy,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -145,6 +171,7 @@ class RuleConfig:
             CONF_ENTITIES: list(self.entities),
             CONF_DELAY_SECONDS: self.delay_seconds,
             CONF_RETRY_INTERVAL_SECONDS: self.retry_interval_seconds,
+            CONF_TRIGGER_POLICY: self.trigger_policy.value,
             CONF_RULE_ID: self.rule_id,
         }
 

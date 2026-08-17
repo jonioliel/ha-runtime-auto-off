@@ -20,8 +20,10 @@ from custom_components.runtime_auto_off.const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_TRIGGER_POLICY,
     DOMAIN,
 )
+from custom_components.runtime_auto_off.models import TriggerPolicy
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -79,12 +81,14 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
     assert result["step_id"] == "delay"
     assert _schema_default(result, CONF_DELAY) == {"hours": 1}
     assert _schema_default(result, CONF_RETRY_INTERVAL) == {"minutes": 5}
+    assert _schema_default(result, CONF_TRIGGER_POLICY) == TriggerPolicy.FIRST.value
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
             CONF_DELAY: {"minutes": 45},
             CONF_RETRY_INTERVAL: {"seconds": 0},
+            CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
         },
     )
     assert result["type"] is FlowResultType.FORM
@@ -95,6 +99,7 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
         {
             CONF_DELAY: {"minutes": 45},
             CONF_RETRY_INTERVAL: {"minutes": 5},
+            CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
         },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -104,6 +109,7 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
     assert entry.options[CONF_ENTITIES] == [room_light.id]
     assert entry.options[CONF_DELAY_SECONDS] == 2700
     assert entry.options[CONF_RETRY_INTERVAL_SECONDS] == 300
+    assert entry.options[CONF_TRIGGER_POLICY] == TriggerPolicy.LAST.value
 
 
 async def test_old_options_default_retry_interval_to_existing_shutdown_time(
@@ -144,18 +150,21 @@ async def test_old_options_default_retry_interval_to_existing_shutdown_time(
     assert result["step_id"] == "delay"
     assert _schema_default(result, CONF_DELAY) == {"minutes": 45}
     assert _schema_default(result, CONF_RETRY_INTERVAL) == {"minutes": 45}
+    assert _schema_default(result, CONF_TRIGGER_POLICY) == TriggerPolicy.FIRST.value
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
             CONF_DELAY: {"minutes": 45},
             CONF_RETRY_INTERVAL: {"minutes": 5},
+            CONF_TRIGGER_POLICY: TriggerPolicy.FIRST.value,
         },
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_DELAY_SECONDS] == 2700
     assert entry.options[CONF_RETRY_INTERVAL_SECONDS] == 300
+    assert entry.options[CONF_TRIGGER_POLICY] == TriggerPolicy.FIRST.value
 
 
 async def test_empty_area_never_exposes_an_unrestricted_picker(

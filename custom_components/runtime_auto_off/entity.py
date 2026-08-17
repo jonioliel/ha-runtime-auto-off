@@ -6,7 +6,14 @@ from homeassistant.core import callback
 from homeassistant.helpers.entity import Entity
 
 from . import RuntimeAutoOffConfigEntry
-from .const import CONF_AREA_ID, CONF_NAME, CONF_RULE_ID
+from .const import (
+    CONF_AREA_ID,
+    CONF_DELAY_SECONDS,
+    CONF_NAME,
+    CONF_RETRY_INTERVAL_SECONDS,
+    CONF_RULE_ID,
+    CONF_TRIGGER_POLICY,
+)
 from .controller import RuntimeAutoOffController
 from .device import rule_device_info
 
@@ -41,4 +48,9 @@ class RuntimeAutoOffEntity(Entity):
         return {
             CONF_AREA_ID: self.controller.config.area_id,
             CONF_NAME: self.controller.config.name,
+            CONF_DELAY_SECONDS: self.controller.config.delay_seconds,
+            CONF_RETRY_INTERVAL_SECONDS: (
+                self.controller.config.retry_interval_seconds
+            ),
+            CONF_TRIGGER_POLICY: self.controller.config.trigger_policy.value,
         }

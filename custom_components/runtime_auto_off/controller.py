@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -50,7 +51,9 @@ from .models import (
     LastExecution,
     RuleConfig,
     RuntimeCycle,
+    ShutdownKind,
     Status,
+    TriggerPolicy,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -113,10 +116,12 @@ class RuntimeAutoOffController:
         self._cycles: dict[str, RuntimeCycle] = {}
         self._unavailable_entities: dict[str, str] = {}
         self._next_deadline: datetime | None = None
+        self._next_shutdown_kind: ShutdownKind | None = None
         self._trigger_entity: str | None = None
         self._last_execution: LastExecution | None = None
         self._last_activity: ActivityEvent | None = None
         self._last_saved_payload: dict[str, Any] | None = None
+        self._stored_retry_interval_seconds: float | None = None
 
         self._state_listeners: set[StateListener] = set()
         self._activity_listeners: set[ActivityListener] = set()
@@ -143,6 +148,30 @@ class RuntimeAutoOffController:
         return self._trigger_entity
 
     @property
+    def trigger_started_at(self) -> datetime | None:
+        """Return when the currently triggering entity became active."""
+        for cycle in self._cycles.values():
+            if cycle.entity_id == self._trigger_entity:
+                return cycle.started_at
+        return None
+
+    @property
+    def next_shutdown_kind(self) -> ShutdownKind | None:
+        return self._next_shutdown_kind
+
+    @property
+    def active_since(self) -> dict[str, datetime]:
+        """Return the preserved active start time for every tracked entity."""
+        return {
+            cycle.entity_id: cycle.started_at
+            for cycle in sorted(self._cycles.values(), key=lambda item: item.entity_id)
+        }
+
+    @property
+    def unavailable_entities(self) -> dict[str, str]:
+        return dict(self._unavailable_entities)
+
+    @property
     def any_active(self) -> bool:
         return bool(self._cycles)
 
@@ -163,6 +192,9 @@ class RuntimeAutoOffController:
             "enabled": self.enabled,
             "status": self.status.value,
             "deadline": self.deadline.isoformat() if self.deadline else None,
+            "next_shutdown_kind": (
+                self.next_shutdown_kind.value if self.next_shutdown_kind else None
+            ),
             "trigger_entity": self.trigger_entity,
             "active_cycles": [
                 cycle.as_dict()
@@ -209,6 +241,7 @@ class RuntimeAutoOffController:
                 self._restore_locked(stored)
                 self._sync_cycles_locked()
                 now = dt_util.utcnow()
+                self._apply_retry_interval_change_locked(now)
                 self._rearm_interrupted_cycles_locked(now)
                 plan, activity = self._reconcile_locked(now)
                 self._setup_complete = True
@@ -346,11 +379,13 @@ class RuntimeAutoOffController:
         """Schedule the earliest cycle or durably claim a due batch."""
         if not self._enabled:
             self._cancel_deadline_locked()
+            self._next_shutdown_kind = None
             self._status = Status.DISABLED
             return None, None
 
         if not self._cycles:
             self._cancel_deadline_locked()
+            self._next_shutdown_kind = None
             self._trigger_entity = None
             self._status = (
                 Status.SENSOR_UNAVAILABLE
@@ -362,19 +397,45 @@ class RuntimeAutoOffController:
         pending = [cycle for cycle in self._cycles.values() if not cycle.handled]
         if not pending:
             self._cancel_deadline_locked()
+            self._next_shutdown_kind = None
             self._trigger_entity = None
             self._status = Status.COMPLETED
             return None, None
 
-        trigger = min(
-            pending,
-            key=lambda cycle: cycle.deadline(self.config.delay_seconds),
-        )
+        retry_pending = [cycle for cycle in pending if cycle.retry_at is not None]
+        if retry_pending:
+            trigger = min(
+                retry_pending,
+                key=lambda cycle: (
+                    cycle.deadline(self.config.delay_seconds),
+                    cycle.stable_key,
+                ),
+            )
+        elif self.config.trigger_policy is TriggerPolicy.LAST:
+            trigger = max(
+                pending,
+                key=lambda cycle: (
+                    cycle.deadline(self.config.delay_seconds),
+                    cycle.stable_key,
+                ),
+            )
+        else:
+            trigger = min(
+                pending,
+                key=lambda cycle: (
+                    cycle.deadline(self.config.delay_seconds),
+                    cycle.stable_key,
+                ),
+            )
         deadline = trigger.deadline(self.config.delay_seconds)
+        is_retry = trigger.retry_at is not None
         self._trigger_entity = trigger.entity_id
         if now < deadline:
             changed = self._next_deadline != deadline
             self._schedule_deadline_locked(deadline)
+            self._next_shutdown_kind = (
+                ShutdownKind.RETRY if is_retry else ShutdownKind.INITIAL
+            )
             self._status = Status.COUNTDOWN
             activity = (
                 self._new_activity_locked(
@@ -383,7 +444,7 @@ class RuntimeAutoOffController:
                         "trigger_entity": trigger.entity_id,
                         "started_at": trigger.started_at.isoformat(),
                         "deadline": deadline.isoformat(),
-                        "is_retry": trigger.retry_at is not None,
+                        "is_retry": is_retry,
                     },
                 )
                 if changed
@@ -392,6 +453,7 @@ class RuntimeAutoOffController:
             return None, activity
 
         self._cancel_deadline_locked()
+        self._next_shutdown_kind = None
         self._trigger_entity = trigger.entity_id
         # Claim every entity that is currently active. This prevents a second
         # overdue entity from creating a parallel or repeating execution.
@@ -405,7 +467,7 @@ class RuntimeAutoOffController:
                 trigger_entity=trigger.entity_id,
                 trigger_started_at=trigger.started_at,
                 claimed_at=now,
-                is_retry=trigger.retry_at is not None,
+                is_retry=is_retry,
                 target_entities=self.config.entities,
             ),
             None,
@@ -528,6 +590,35 @@ class RuntimeAutoOffController:
         if followup_plan is not None:
             await self._async_execute_serialized(followup_plan)
 
+    def _apply_retry_interval_change_locked(self, now: datetime) -> bool:
+        """Recalculate persisted retry deadlines after an options change."""
+        current_interval = float(self.config.retry_interval_seconds or 0)
+        stored_interval = self._stored_retry_interval_seconds
+        self._stored_retry_interval_seconds = current_interval
+        if stored_interval is not None and math.isclose(
+            stored_interval, current_interval, rel_tol=0, abs_tol=1e-6
+        ):
+            return False
+
+        changed = False
+        updated: dict[str, RuntimeCycle] = {}
+        for key, cycle in self._cycles.items():
+            if cycle.retry_at is not None and not cycle.handled:
+                if stored_interval is not None and stored_interval > 0:
+                    attempted_at = cycle.retry_at - timedelta(seconds=stored_interval)
+                elif self._last_execution is not None:
+                    attempted_at = self._last_execution.occurred_at
+                else:
+                    attempted_at = now
+                cycle = replace(
+                    cycle,
+                    retry_at=attempted_at + timedelta(seconds=current_interval),
+                )
+                changed = True
+            updated[key] = cycle
+        self._cycles = updated
+        return changed
+
     def _rearm_interrupted_cycles_locked(self, now: datetime) -> bool:
         """Schedule another check for active cycles claimed by an earlier attempt."""
         if self.config.retry_interval_seconds <= 0:
@@ -560,8 +651,8 @@ class RuntimeAutoOffController:
             key = self._stable_key_by_entity[entity_id]
             identity_error = self._identity_or_area_error(entity_id)
             # Process queued transitions in event order. Looking only at the
-            # latest state could miss a rapid off→on cycle and incorrectly keep
-            # the previous cycle marked as handled.
+            # latest state could miss a rapid off-to-on cycle and incorrectly
+            # keep the previous cycle marked as handled.
             state = (
                 event_state
                 if entity_id == event_entity
@@ -573,11 +664,17 @@ class RuntimeAutoOffController:
                 continue
             if state is None:
                 unavailable[entity_id] = "missing_state"
-                self._cycles.pop(key, None)
+                if key in self._cycles:
+                    cycle = self._cycles[key]
+                    if cycle.entity_id != entity_id:
+                        self._cycles[key] = replace(cycle, entity_id=entity_id)
                 continue
             if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
                 unavailable[entity_id] = state.state
-                self._cycles.pop(key, None)
+                if key in self._cycles:
+                    cycle = self._cycles[key]
+                    if cycle.entity_id != entity_id:
+                        self._cycles[key] = replace(cycle, entity_id=entity_id)
                 continue
             if state.state == STATE_OFF:
                 self._cycles.pop(key, None)
@@ -646,6 +743,7 @@ class RuntimeAutoOffController:
             self._unsub_deadline()
             self._unsub_deadline = None
         self._next_deadline = None
+        self._next_shutdown_kind = None
 
     @callback
     def _subscribe_state_changes(self) -> None:
@@ -676,6 +774,14 @@ class RuntimeAutoOffController:
             return
         if isinstance(enabled := stored.get("enabled"), bool):
             self._enabled = enabled
+        raw_retry_interval = stored.get("retry_interval_seconds")
+        if (
+            isinstance(raw_retry_interval, (int, float))
+            and not isinstance(raw_retry_interval, bool)
+            and math.isfinite(raw_retry_interval)
+            and raw_retry_interval >= 0
+        ):
+            self._stored_retry_interval_seconds = float(raw_retry_interval)
         raw_cycles = stored.get("cycles")
         if isinstance(raw_cycles, list):
             for raw_cycle in raw_cycles:
@@ -691,6 +797,7 @@ class RuntimeAutoOffController:
     async def _async_save_locked(self, *, force: bool = False) -> None:
         payload = {
             "enabled": self._enabled,
+            "retry_interval_seconds": self.config.retry_interval_seconds,
             "cycles": [
                 cycle.as_dict()
                 for cycle in sorted(

@@ -23,6 +23,9 @@ from homeassistant.helpers.selector import (
     DurationSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -35,15 +38,25 @@ from .const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_TRIGGER_POLICY,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_RETRY_INTERVAL_SECONDS,
     DOMAIN,
 )
 from .helpers import effective_area_id
+from .models import TriggerPolicy
 
 CONF_DELAY = "delay"
 CONF_RETRY_INTERVAL = "retry_interval"
 MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
+
+_TRIGGER_POLICY_SELECTOR = SelectSelector(
+    SelectSelectorConfig(
+        options=[policy.value for policy in TriggerPolicy],
+        mode=SelectSelectorMode.DROPDOWN,
+        translation_key="trigger_policy",
+    )
+)
 
 
 def _seconds_to_duration(seconds: float) -> dict[str, float]:
@@ -188,6 +201,12 @@ class _RuleFlowMixin:
                 ): DurationSelector(
                     DurationSelectorConfig(enable_day=True, enable_second=True)
                 ),
+                vol.Required(
+                    CONF_TRIGGER_POLICY,
+                    default=self._working.get(
+                        CONF_TRIGGER_POLICY, TriggerPolicy.FIRST.value
+                    ),
+                ): _TRIGGER_POLICY_SELECTOR,
             }
         )
 
@@ -226,8 +245,13 @@ class _RuleFlowMixin:
         retry_interval = _duration_to_seconds(user_input[CONF_RETRY_INTERVAL])
         if retry_interval <= 0 or retry_interval > MAX_DELAY_SECONDS:
             return {CONF_RETRY_INTERVAL: "invalid_retry_interval"}
+        try:
+            trigger_policy = TriggerPolicy(user_input[CONF_TRIGGER_POLICY])
+        except (TypeError, ValueError):
+            return {CONF_TRIGGER_POLICY: "invalid_trigger_policy"}
         self._working[CONF_DELAY_SECONDS] = delay
         self._working[CONF_RETRY_INTERVAL_SECONDS] = retry_interval
+        self._working[CONF_TRIGGER_POLICY] = trigger_policy.value
         return {}
 
 

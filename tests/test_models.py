@@ -9,11 +9,13 @@ from custom_components.runtime_auto_off.const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_TRIGGER_POLICY,
 )
 from custom_components.runtime_auto_off.models import (
     LastExecution,
     RuleConfig,
     RuntimeCycle,
+    TriggerPolicy,
 )
 
 
@@ -25,6 +27,7 @@ def test_rule_config_normalizes_and_round_trips() -> None:
             CONF_ENTITIES: ["light.main", "light.main", "switch.tv"],
             CONF_DELAY_SECONDS: 600,
             CONF_RETRY_INTERVAL_SECONDS: 120,
+            CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
             CONF_RULE_ID: "rule-id",
         }
     )
@@ -33,6 +36,7 @@ def test_rule_config_normalizes_and_round_trips() -> None:
     assert config.entities == ("light.main", "switch.tv")
     assert config.delay_seconds == 600
     assert config.retry_interval_seconds == 120
+    assert config.trigger_policy is TriggerPolicy.LAST
     assert RuleConfig.from_mapping(config.as_dict()) == config
 
 
@@ -41,6 +45,7 @@ def test_old_config_uses_shutdown_time_as_retry_interval() -> None:
 
     assert config.delay_seconds == 2700
     assert config.retry_interval_seconds == 2700
+    assert config.trigger_policy is TriggerPolicy.FIRST
 
 
 def test_cycle_and_execution_round_trip() -> None:

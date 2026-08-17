@@ -17,7 +17,7 @@
       },
       "entities": {
         "title": "Choose timed entities",
-        "description": "Select the entities to monitor and turn off. When ANY selected entity remains active continuously for the configured time, ALL selected entities are turned off. Unselected entities are never touched. A selected Home Assistant group may control all its members.",
+        "description": "Select the entities to monitor and turn off. Every selected entity gets its own continuous-runtime clock. The configured First/Last policy decides which active clock triggers shutdown of ALL selected active entities. Unselected entities are never touched. A selected Home Assistant group may control all its members.",
         "data": {
           "entities": "Entities to monitor and turn off"
         },
@@ -27,14 +27,16 @@
       },
       "delay": {
         "title": "Choose the maximum continuous runtime",
-        "description": "Set the maximum continuous runtime and a separate retry interval. The first entity to reach the runtime limit triggers shutdown of all selected active entities. If an entity remains active, it is checked and retried at the retry interval until it turns off.",
+        "description": "Set the maximum continuous runtime, choose whether the oldest or newest active entity controls the initial deadline, and set a separate retry interval. If an entity remains active after shutdown, it is checked and retried at the retry interval until it turns off.",
         "data": {
           "delay": "Maximum continuous runtime",
-          "retry_interval": "Retry/check interval"
+          "retry_interval": "Retry/check interval",
+          "trigger_policy": "Initial shutdown trigger"
         },
         "data_description": {
           "delay": "How long one selected entity may remain continuously active before the first automatic shutdown.",
-          "retry_interval": "How often to check and retry while an overdue selected entity is still active."
+          "retry_interval": "How often to check and retry while an overdue selected entity is still active.",
+          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included."
         }
       }
     },
@@ -45,7 +47,8 @@
       "entity_not_found": "A selected entity no longer exists. Choose it again.",
       "entity_not_allowed": "Choose only enabled entities from this room that support turn off.",
       "invalid_delay": "Choose a duration between 0 seconds and 30 days",
-      "invalid_retry_interval": "Choose a retry interval between 1 second and 30 days"
+      "invalid_retry_interval": "Choose a retry interval between 1 second and 30 days",
+      "invalid_trigger_policy": "Choose first or last active entity"
     }
   },
   "options": {
@@ -64,7 +67,7 @@
       },
       "entities": {
         "title": "Edit timed entities",
-        "description": "These entities are both monitored and turned off. When ANY one reaches the limit, ALL selected active entities are turned off. Unselected entities are never touched. A selected group may control all its members.",
+        "description": "These entities are both monitored and turned off. Every selected entity has its own continuous-runtime clock; the configured First/Last policy controls the initial deadline. ALL selected active entities are then turned off. Unselected entities are never touched. A selected group may control all its members.",
         "data": {
           "entities": "Entities to monitor and turn off"
         },
@@ -77,11 +80,13 @@
         "description": "The counter starts when an entity becomes active and stops when it turns off. Configure the first shutdown time and the later retry/check interval separately. Retry deadlines survive restarts.",
         "data": {
           "delay": "Maximum continuous runtime",
-          "retry_interval": "Retry/check interval"
+          "retry_interval": "Retry/check interval",
+          "trigger_policy": "Initial shutdown trigger"
         },
         "data_description": {
           "delay": "How long one selected entity may remain continuously active before the first automatic shutdown.",
-          "retry_interval": "How often to check and retry while an overdue selected entity is still active."
+          "retry_interval": "How often to check and retry while an overdue selected entity is still active.",
+          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included."
         }
       }
     },
@@ -92,7 +97,16 @@
       "entity_not_found": "A selected entity no longer exists. Choose it again.",
       "entity_not_allowed": "Choose only enabled entities from this room that support turn off.",
       "invalid_delay": "Choose a duration between 0 seconds and 30 days",
-      "invalid_retry_interval": "Choose a retry interval between 1 second and 30 days"
+      "invalid_retry_interval": "Choose a retry interval between 1 second and 30 days",
+      "invalid_trigger_policy": "Choose first or last active entity"
+    }
+  },
+  "selector": {
+    "trigger_policy": {
+      "options": {
+        "first": "First active entity reaches the limit",
+        "last": "Last active entity reaches the limit"
+      }
     }
   },
   "entity": {
@@ -121,13 +135,29 @@
         }
       },
       "trigger_entity": {
-        "name": "Entity reaching the limit first"
+        "name": "Entity controlling the next shutdown"
+      },
+      "trigger_active_since": {
+        "name": "Trigger entity active since"
       },
       "next_shutdown": {
         "name": "Scheduled runtime shutdown"
       },
+      "next_shutdown_kind": {
+        "name": "Next shutdown type",
+        "state": {
+          "initial": "Initial runtime shutdown",
+          "retry": "Retry check"
+        }
+      },
       "last_shutdown": {
         "name": "Last executed shutdown"
+      },
+      "configured_runtime": {
+        "name": "Maximum continuous runtime"
+      },
+      "retry_interval": {
+        "name": "Retry/check interval"
       }
     },
     "event": {

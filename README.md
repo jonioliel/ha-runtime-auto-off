@@ -7,6 +7,9 @@
 במשך הזמן שהוגדר, האינטגרציה מכבה את כל הרכיבים הפעילים שנבחרו. אם רכיב
 נשאר פעיל, מרווח בדיקה נפרד קובע מתי יתבצע ניסיון נוסף.
 
+בהגדרות אפשר לבחור אם מועד הכיבוי הראשון נקבע לפי הרכיב הפעיל הראשון
+(הוותיק ביותר) או לפי הרכיב הפעיל האחרון (זה שהופעל לאחרונה).
+
 ## עקרונות בטיחות
 
 - רק רכיבים שנבחרו במפורש נשלטים; ה־Area משמש לסינון בלבד.
@@ -15,6 +18,9 @@
 - `unknown`, `unavailable`, רכיב מושבת, רכיב שהועבר חדר או זהות שהשתנתה
   מטופלים בצורה סגורה ובטוחה.
 - Group שנבחר במפורש עלול לשלוט בכל חבריו.
+- מחזור פעיל שכבר נמדד נשמר דרך `unknown`,‏ `unavailable`, מצב חסר ואתחול של
+  Home Assistant. רק מצב `off` שנצפה בפועל מאפס אותו. אם הרכיב נכבה ונדלק
+  בזמן שכל המערכת לא הייתה זמינה, אין דרך טכנית לזהות זאת.
 
 ## אופן הפעולה
 
@@ -23,7 +29,8 @@
 3. עדכון מאפיינים או מעבר בין שני מצבים פעילים אינו מאפס את הספירה.
 4. כיבוי הרכיב לפני המועד מבטל את המחזור שלו.
 5. הרכיב הראשון שמגיע לזמן המרבי מפעיל ניסיון כיבוי לכל הרכיבים
-   הפעילים שנבחרו.
+   הפעילים שנבחרו במצב **הראשון**. במצב **האחרון**, ממתינים עד שהרכיב
+   הפעיל שהופעל לאחרונה מגיע לזמן המרבי.
 6. אם רכיב נשאר פעיל לאחר ניסיון הכיבוי, האינטגרציה מתזמנת בדיקה נוספת
    לפי מרווח הבדיקה הנפרד ומנסה לכבות שוב את הרכיבים שעדיין פעילים.
 7. שעת ההדלקה המקורית אינה מתאפסת בין הניסיונות. הבדיקה החוזרת נמשכת
@@ -42,8 +49,12 @@
 - חיישן בינארי שמציג אם רכיב נבחר כלשהו פעיל.
 - חיישן מצב: אתחול, מושבת, המתנה, ספירה, ביצוע, הושלם או שגיאה.
 - חיישן שמציג איזה רכיב צפוי להגיע ראשון לזמן המרבי.
+- חיישן שמציג ממתי הרכיב המפעיל פעיל. חיישן הפעילות כולל במאפיינים את
+  שעת ההתחלה של כל רכיב ואת הרכיבים שנחשבים פעילים בזמן חוסר זמינות.
 - חיישן זמן לכיבוי המתוכנן הבא.
+- חיישן שמבדיל בין כיבוי ראשון לבין ניסיון חוזר.
 - חיישן זמן לכיבוי האחרון שבוצע.
+- חיישנים שמציגים את זמן הפעולה המרבי ואת מרווח הבדיקה שהוגדרו.
 - Event entity לפעילות: תזמון, ביטול, ביצוע, אין פעולה או כשל.
 
 ה־Device כולל קישור ישיר להגדרות האינטגרציה, ולכן אפשר לערוך ממנו את
@@ -70,6 +81,9 @@ Each entity has an independent continuous-active timer. When any selected entity
 reaches the configured duration, all selected active entities receive a shutdown
 command. Any entity that remains active is checked and retried after the
 configured retry interval, which is independent from the initial runtime limit.
+The initial deadline can follow either the first (oldest) or last (newest) active
+entity. Persisted active clocks continue through unavailable states and restarts
+until an actual off state is observed.
 Retry deadlines survive restarts, and service success is accepted only when Home
 Assistant confirms the entity is off. The integration
 creates one first-class Home Assistant device per rule and supports full UI editing.

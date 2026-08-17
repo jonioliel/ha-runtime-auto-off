@@ -8,7 +8,13 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    SERVICE_TURN_OFF,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import split_entity_id
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
@@ -16,7 +22,12 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.runtime_auto_off.controller import RuntimeAutoOffController
-from custom_components.runtime_auto_off.models import RuleConfig, Status
+from custom_components.runtime_auto_off.models import (
+    RuleConfig,
+    ShutdownKind,
+    Status,
+    TriggerPolicy,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -111,10 +122,17 @@ def _config(
     *,
     delay: float = 600,
     retry_interval: float | None = None,
+    trigger_policy: TriggerPolicy = TriggerPolicy.FIRST,
     entities: tuple[str, ...] = (LIGHT, SWITCH),
 ) -> RuleConfig:
     return RuleConfig(
-        "Test room", AREA_ID, entities, delay, "test-rule", retry_interval
+        "Test room",
+        AREA_ID,
+        entities,
+        delay,
+        "test-rule",
+        retry_interval,
+        trigger_policy,
     )
 
 
@@ -197,12 +215,14 @@ async def test_failed_active_cycle_retries_after_configured_interval(
 
     first_deadline = controller.deadline
     assert first_deadline is not None
+    assert controller.next_shutdown_kind is ShutdownKind.INITIAL
     async_fire_time_changed(hass, first_deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
     assert turn_off_recorder.calls == [LIGHT]
     assert controller.status is Status.COUNTDOWN
     retry_deadline = controller.deadline
     assert retry_deadline is not None
+    assert controller.next_shutdown_kind is ShutdownKind.RETRY
     assert retry_deadline >= first_deadline + timedelta(minutes=5)
     assert retry_deadline <= first_deadline + timedelta(minutes=5, seconds=2)
     assert controller.last_execution is not None
@@ -335,6 +355,90 @@ async def test_retry_deadline_survives_restart(
     assert turn_off_recorder.calls == [LIGHT, LIGHT]
     assert hass.states.get(LIGHT) is not None
     assert hass.states.get(LIGHT).state == STATE_OFF
+
+
+async def test_last_policy_tracks_most_recently_activated_entity(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+) -> None:
+    controller = await controller_factory(
+        _config(delay=600, trigger_policy=TriggerPolicy.LAST)
+    )
+    hass.states.async_set(LIGHT, STATE_ON)
+    await hass.async_block_till_done()
+    light_deadline = controller.deadline
+    assert light_deadline is not None
+
+    hass.states.async_set(SWITCH, STATE_ON)
+    switch_state = hass.states.get(SWITCH)
+    assert switch_state is not None
+    await hass.async_block_till_done()
+
+    assert controller.trigger_entity == SWITCH
+    assert controller.deadline == switch_state.last_changed + timedelta(minutes=10)
+    assert controller.deadline >= light_deadline
+
+    hass.states.async_set(SWITCH, STATE_OFF)
+    await hass.async_block_till_done()
+    assert controller.trigger_entity == LIGHT
+    assert controller.deadline == light_deadline
+
+
+async def test_unavailable_and_restart_preserve_continuous_runtime(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    config = _config(delay=600, retry_interval=60, entities=(LIGHT,))
+    first = await controller_factory(config, "unavailable-restart-entry")
+    hass.states.async_set(LIGHT, STATE_ON)
+    await hass.async_block_till_done()
+    original_deadline = first.deadline
+    original_started_at = first.active_since[LIGHT]
+    assert original_deadline is not None
+
+    hass.states.async_set(LIGHT, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    assert first.active_since[LIGHT] == original_started_at
+    assert first.deadline == original_deadline
+    assert first.unavailable_entities == {LIGHT: STATE_UNAVAILABLE}
+    await first.async_unload()
+
+    restarted = await controller_factory(config, "unavailable-restart-entry")
+    assert restarted.active_since[LIGHT] == original_started_at
+    assert restarted.deadline == original_deadline
+    assert restarted.unavailable_entities == {LIGHT: STATE_UNAVAILABLE}
+
+    hass.states.async_set(LIGHT, STATE_ON)
+    await hass.async_block_till_done()
+    assert restarted.active_since[LIGHT] == original_started_at
+    assert restarted.deadline == original_deadline
+    async_fire_time_changed(hass, original_deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    assert turn_off_recorder.calls == [LIGHT]
+
+
+async def test_options_reload_recalculates_existing_retry_deadline(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    turn_off_recorder.failures.add(LIGHT)
+    hass.states.async_set(LIGHT, STATE_ON)
+    first = await controller_factory(
+        _config(delay=0, retry_interval=2700, entities=(LIGHT,)),
+        "retry-options-entry",
+    )
+    old_retry_deadline = first.deadline
+    assert old_retry_deadline is not None
+    await first.async_unload()
+
+    reloaded = await controller_factory(
+        _config(delay=0, retry_interval=180, entities=(LIGHT,)),
+        "retry-options-entry",
+    )
+    assert reloaded.next_shutdown_kind is ShutdownKind.RETRY
+    assert reloaded.deadline == old_retry_deadline - timedelta(minutes=42)
 
 
 async def test_moved_entity_is_never_called(

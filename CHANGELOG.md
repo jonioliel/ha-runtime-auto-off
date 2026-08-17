@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.0] - 2026-08-17
+
+### Added
+
+- Configurable first/last active-entity policy for the initial shutdown deadline.
+- Device sensors for configured runtime, retry interval, next shutdown type, and
+  trigger active-since time.
+- Per-entity `active_since` attributes, including explicit assumed-active markers
+  while an entity is unavailable.
+
+### Changed
+
+- Persisted active cycles now survive `unknown`, `unavailable`, missing state, and
+  Home Assistant restarts; only an observed `off` state resets the runtime clock.
+- Editing the retry interval immediately recalculates an already pending retry.
+- Pending retries take priority over first/last policy so a failed shutdown is not
+  delayed by a newly active entity.
+
 ## [1.2.0] - 2026-08-17
 
 ### Added
@@ -35,6 +53,7 @@
 - English and Hebrew configuration, entity, status, and event translations.
 - HACS metadata, diagnostics, tests, Ruff, Hassfest, and HACS validation workflows.
 
+[1.3.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jonioliel/ha-runtime-auto-off/releases/tag/v1.0.0

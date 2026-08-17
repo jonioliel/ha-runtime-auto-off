@@ -1,6 +1,6 @@
 """Binary sensor platform for Runtime Auto-Off."""
 
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, override
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
@@ -31,3 +31,17 @@ class RuntimeAutoOffAnyActiveBinarySensor(RuntimeAutoOffEntity, BinarySensorEnti
     @override
     def is_on(self) -> bool:
         return self.controller.any_active
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = super().extra_state_attributes
+        attributes["active_since"] = {
+            entity_id: started_at.isoformat()
+            for entity_id, started_at in self.controller.active_since.items()
+        }
+        attributes["assumed_active_while_unavailable"] = sorted(
+            set(self.controller.active_since)
+            & set(self.controller.unavailable_entities)
+        )
+        return attributes

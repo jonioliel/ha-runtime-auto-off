@@ -67,10 +67,14 @@ async def test_rule_device_owns_every_generated_entity(hass: HomeAssistant) -> N
     assert {item.unique_id for item in entities} == {
         f"{rule_id}_activity",
         f"{rule_id}_any_active",
+        f"{rule_id}_configured_runtime",
         f"{rule_id}_enabled",
         f"{rule_id}_last_shutdown",
         f"{rule_id}_next_shutdown",
+        f"{rule_id}_next_shutdown_kind",
+        f"{rule_id}_retry_interval",
         f"{rule_id}_status",
+        f"{rule_id}_trigger_active_since",
         f"{rule_id}_trigger_entity",
     }
     assert {item.device_id for item in entities} == {device.id}
