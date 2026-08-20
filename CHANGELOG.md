@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.4.1] - 2026-08-20
+
+- Added automatic GitHub Release publication for version tags so HACS can discover new versions reliably.
+
 ## [1.4.0] - 2026-08-20
 
 - Added an optional combined Shabbat/holiday binary sensor. Automatic shutdowns and retries are blocked while it is on, and fail closed while it is unavailable.
