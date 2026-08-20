@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 AREA_ID = "test_room"
 LIGHT = "light.room"
 SWITCH = "switch.room"
+SHABBAT = "binary_sensor.shabbat_or_holiday"
 
 
 @dataclass(slots=True)
@@ -124,6 +125,7 @@ def _config(
     retry_interval: float | None = None,
     trigger_policy: TriggerPolicy = TriggerPolicy.FIRST,
     entities: tuple[str, ...] = (LIGHT, SWITCH),
+    shabbat_entity: str | None = None,
 ) -> RuleConfig:
     return RuleConfig(
         "Test room",
@@ -133,7 +135,45 @@ def _config(
         "test-rule",
         retry_interval,
         trigger_policy,
+        shabbat_entity,
     )
+
+
+async def test_shabbat_sensor_blocks_shutdown_until_special_day_ends(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.states.async_set(SHABBAT, STATE_ON)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=0, entities=(LIGHT,), shabbat_entity=SHABBAT)
+    )
+
+    assert controller.status is Status.WAITING_CONDITION
+    assert controller.deadline is None
+    assert turn_off_recorder.calls == []
+
+    hass.states.async_set(SHABBAT, STATE_OFF)
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT]
+    assert hass.states[LIGHT].state == STATE_OFF
+
+
+async def test_unavailable_shabbat_sensor_fails_closed(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.states.async_set(SHABBAT, STATE_UNAVAILABLE)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=0, entities=(LIGHT,), shabbat_entity=SHABBAT)
+    )
+
+    assert controller.status is Status.SENSOR_UNAVAILABLE
+    assert turn_off_recorder.calls == []
 
 
 async def test_countdown_follows_continuous_active_transition(

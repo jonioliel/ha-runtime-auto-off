@@ -38,6 +38,7 @@ from .const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_SHABBAT_ENTITY,
     CONF_TRIGGER_POLICY,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_RETRY_INTERVAL_SECONDS,
@@ -145,6 +146,12 @@ def _required_marker(key: str, value: str | None) -> vol.Required:
     return vol.Required(key, default=value) if value else vol.Required(key)
 
 
+def _optional_entity_marker(key: str, value: str | None) -> vol.Optional:
+    if value:
+        return vol.Optional(key, description={"suggested_value": value})
+    return vol.Optional(key)
+
+
 class _RuleFlowMixin:
     hass: HomeAssistant
     _working: dict[str, Any]
@@ -207,6 +214,18 @@ class _RuleFlowMixin:
                         CONF_TRIGGER_POLICY, TriggerPolicy.FIRST.value
                     ),
                 ): _TRIGGER_POLICY_SELECTOR,
+                _optional_entity_marker(
+                    CONF_SHABBAT_ENTITY,
+                    (
+                        _resolve_entity_id(
+                            self.hass, self._working[CONF_SHABBAT_ENTITY]
+                        )
+                        if self._working.get(CONF_SHABBAT_ENTITY)
+                        else None
+                    ),
+                ): EntitySelector(
+                    EntitySelectorConfig(domain="binary_sensor", multiple=False)
+                ),
             }
         )
 
@@ -249,9 +268,22 @@ class _RuleFlowMixin:
             trigger_policy = TriggerPolicy(user_input[CONF_TRIGGER_POLICY])
         except (TypeError, ValueError):
             return {CONF_TRIGGER_POLICY: "invalid_trigger_policy"}
+        shabbat_reference = user_input.get(CONF_SHABBAT_ENTITY)
+        shabbat_entity = None
+        if shabbat_reference:
+            shabbat_entity = _resolve_entity_id(self.hass, shabbat_reference)
+            if shabbat_entity is None or not shabbat_entity.startswith(
+                "binary_sensor."
+            ):
+                return {CONF_SHABBAT_ENTITY: "entity_not_found"}
         self._working[CONF_DELAY_SECONDS] = delay
         self._working[CONF_RETRY_INTERVAL_SECONDS] = retry_interval
         self._working[CONF_TRIGGER_POLICY] = trigger_policy.value
+        self._working.pop(CONF_SHABBAT_ENTITY, None)
+        if shabbat_entity is not None:
+            self._working[CONF_SHABBAT_ENTITY] = _canonical_reference(
+                self.hass, shabbat_entity
+            )
         return {}
 
 

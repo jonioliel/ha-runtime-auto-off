@@ -31,12 +31,14 @@
         "data": {
           "delay": "Maximum continuous runtime",
           "retry_interval": "Retry/check interval",
-          "trigger_policy": "Initial shutdown trigger"
+          "trigger_policy": "Initial shutdown trigger",
+          "shabbat_entity": "Shabbat or holiday sensor (optional)"
         },
         "data_description": {
           "delay": "How long one selected entity may remain continuously active before the first automatic shutdown.",
           "retry_interval": "How often to check and retry while an overdue selected entity is still active.",
-          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included."
+          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included.",
+          "shabbat_entity": "When on, automatic shutdowns and retries are paused. An unavailable sensor blocks shutdown for safety."
         }
       }
     },
@@ -81,12 +83,14 @@
         "data": {
           "delay": "Maximum continuous runtime",
           "retry_interval": "Retry/check interval",
-          "trigger_policy": "Initial shutdown trigger"
+          "trigger_policy": "Initial shutdown trigger",
+          "shabbat_entity": "Shabbat or holiday sensor (optional)"
         },
         "data_description": {
           "delay": "How long one selected entity may remain continuously active before the first automatic shutdown.",
           "retry_interval": "How often to check and retry while an overdue selected entity is still active.",
-          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included."
+          "trigger_policy": "First uses the oldest active entity. Last waits until the most recently activated entity reaches the runtime limit. Off entities are not included.",
+          "shabbat_entity": "When on, automatic shutdowns and retries are paused. An unavailable sensor blocks shutdown for safety."
         }
       }
     },
@@ -128,6 +132,7 @@
           "disabled": "Disabled",
           "idle": "All selected entities are off",
           "countdown": "Counting continuous runtime",
+          "waiting_condition": "Paused for Shabbat or holiday",
           "executing": "Turning selected entities off",
           "completed": "Runtime shutdown completed",
           "sensor_unavailable": "Selected entities unavailable",

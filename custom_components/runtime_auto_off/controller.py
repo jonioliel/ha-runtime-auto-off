@@ -14,6 +14,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     SERVICE_TURN_OFF,
     STATE_OFF,
+    STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
@@ -196,6 +197,12 @@ class RuntimeAutoOffController:
                 self.next_shutdown_kind.value if self.next_shutdown_kind else None
             ),
             "trigger_entity": self.trigger_entity,
+            "shabbat_sensor_state": (
+                self.hass.states.get(self.config.shabbat_entity).state
+                if self.config.shabbat_entity
+                and self.hass.states.get(self.config.shabbat_entity) is not None
+                else None
+            ),
             "active_cycles": [
                 cycle.as_dict()
                 for cycle in sorted(
@@ -394,6 +401,18 @@ class RuntimeAutoOffController:
             )
             return None, None
 
+        shabbat_block = self._shabbat_block_reason()
+        if shabbat_block is not None:
+            if shabbat_block == "sensor_unavailable":
+                self._cancel_deadline_locked()
+                self._trigger_entity = None
+                self._status = Status.SENSOR_UNAVAILABLE
+                return None, None
+            self._cancel_deadline_locked()
+            self._trigger_entity = None
+            self._status = Status.WAITING_CONDITION
+            return None, None
+
         pending = [cycle for cycle in self._cycles.values() if not cycle.handled]
         if not pending:
             self._cancel_deadline_locked()
@@ -490,11 +509,25 @@ class RuntimeAutoOffController:
 
     async def _async_execute_serialized(self, plan: _ExecutionPlan) -> None:
         """Turn each selected active entity off independently."""
+        if self._shabbat_block_reason() is not None:
+            async with self._lock:
+                self._cycles = {
+                    key: replace(cycle, handled=False)
+                    for key, cycle in self._cycles.items()
+                }
+                self._reconcile_locked(dt_util.utcnow())
+                await self._async_save_locked()
+            self._notify_state_listeners()
+            return
+
         successful: list[str] = []
         skipped: dict[str, str] = {}
         failed: dict[str, str] = {}
 
         for entity_id in plan.target_entities:
+            if shabbat_block := self._shabbat_block_reason():
+                skipped[entity_id] = shabbat_block
+                continue
             if self._unloaded or self._action_inhibited:
                 failed[entity_id] = "controller_stopped"
                 continue
@@ -722,6 +755,17 @@ class RuntimeAutoOffController:
             return "already_off"
         return None
 
+    def _shabbat_block_reason(self) -> str | None:
+        """Return why the optional combined Shabbat/holiday gate blocks actions."""
+        if self.config.shabbat_entity is None:
+            return None
+        state = self.hass.states.get(self.config.shabbat_entity)
+        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return "sensor_unavailable"
+        if state.state == STATE_ON:
+            return "shabbat_or_holiday"
+        return None
+
     def _schedule_deadline_locked(self, deadline: datetime) -> None:
         if self._unsub_deadline is not None and self._next_deadline == deadline:
             return
@@ -748,8 +792,11 @@ class RuntimeAutoOffController:
     @callback
     def _subscribe_state_changes(self) -> None:
         if self._unsub_state is None:
+            tracked_entities = list(self.config.entities)
+            if self.config.shabbat_entity is not None:
+                tracked_entities.append(self.config.shabbat_entity)
             self._unsub_state = async_track_state_change_event(
-                self.hass, self.config.entities, self._async_state_changed
+                self.hass, tracked_entities, self._async_state_changed
             )
 
     @callback

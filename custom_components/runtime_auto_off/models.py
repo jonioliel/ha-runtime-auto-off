@@ -18,6 +18,7 @@ from .const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_SHABBAT_ENTITY,
     CONF_TRIGGER_POLICY,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_NAME,
@@ -45,6 +46,7 @@ class Status(StrEnum):
     DISABLED = "disabled"
     IDLE = "idle"
     COUNTDOWN = "countdown"
+    WAITING_CONDITION = "waiting_condition"
     EXECUTING = "executing"
     COMPLETED = "completed"
     SENSOR_UNAVAILABLE = "sensor_unavailable"
@@ -116,6 +118,7 @@ class RuleConfig:
     rule_id: str = ""
     retry_interval_seconds: float | None = None
     trigger_policy: TriggerPolicy = TriggerPolicy.FIRST
+    shabbat_entity: str | None = None
 
     def __post_init__(self) -> None:
         retry_interval = (
@@ -162,10 +165,11 @@ class RuleConfig:
             rule_id=_optional_string(options.get(CONF_RULE_ID)) or "",
             retry_interval_seconds=max(0.0, retry_interval),
             trigger_policy=trigger_policy,
+            shabbat_entity=_optional_string(options.get(CONF_SHABBAT_ENTITY)),
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             CONF_NAME: self.name,
             CONF_AREA_ID: self.area_id,
             CONF_ENTITIES: list(self.entities),
@@ -174,6 +178,9 @@ class RuleConfig:
             CONF_TRIGGER_POLICY: self.trigger_policy.value,
             CONF_RULE_ID: self.rule_id,
         }
+        if self.shabbat_entity is not None:
+            data[CONF_SHABBAT_ENTITY] = self.shabbat_entity
+        return data
 
 
 @dataclass(frozen=True, slots=True)

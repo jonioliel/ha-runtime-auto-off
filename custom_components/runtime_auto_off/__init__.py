@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_ENTITIES
+from .const import CONF_ENTITIES, CONF_SHABBAT_ENTITY
 from .controller import RuntimeAutoOffController
 from .device import rule_device_info
 from .models import RuleConfig
@@ -45,6 +45,8 @@ def _resolve_runtime_config(
             resolve(reference) if isinstance(reference, str) else reference
             for reference in entities
         ]
+    if isinstance(shabbat := config.get(CONF_SHABBAT_ENTITY), str):
+        config[CONF_SHABBAT_ENTITY] = resolve(shabbat)
     return config
 
 

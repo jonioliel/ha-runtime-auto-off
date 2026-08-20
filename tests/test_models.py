@@ -9,6 +9,7 @@ from custom_components.runtime_auto_off.const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_SHABBAT_ENTITY,
     CONF_TRIGGER_POLICY,
 )
 from custom_components.runtime_auto_off.models import (
@@ -29,6 +30,7 @@ def test_rule_config_normalizes_and_round_trips() -> None:
             CONF_RETRY_INTERVAL_SECONDS: 120,
             CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
             CONF_RULE_ID: "rule-id",
+            CONF_SHABBAT_ENTITY: "binary_sensor.shabbat_or_holiday",
         }
     )
 
@@ -37,6 +39,7 @@ def test_rule_config_normalizes_and_round_trips() -> None:
     assert config.delay_seconds == 600
     assert config.retry_interval_seconds == 120
     assert config.trigger_policy is TriggerPolicy.LAST
+    assert config.shabbat_entity == "binary_sensor.shabbat_or_holiday"
     assert RuleConfig.from_mapping(config.as_dict()) == config
 
 

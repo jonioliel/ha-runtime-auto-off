@@ -10,6 +10,7 @@ CONF_ENTITIES: Final = "entities"
 CONF_DELAY_SECONDS: Final = "delay_seconds"
 CONF_RETRY_INTERVAL_SECONDS: Final = "retry_interval_seconds"
 CONF_TRIGGER_POLICY: Final = "trigger_policy"
+CONF_SHABBAT_ENTITY: Final = "shabbat_entity"
 CONF_RULE_ID: Final = "rule_id"
 
 DEFAULT_NAME: Final = "Runtime Auto-Off"

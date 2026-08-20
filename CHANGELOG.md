@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added an optional combined Shabbat/holiday binary sensor. Automatic shutdowns and retries are blocked while it is on, and fail closed while it is unavailable.
+
 ## [1.3.0] - 2026-08-17
 
 ### Added

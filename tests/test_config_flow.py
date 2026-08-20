@@ -20,6 +20,7 @@ from custom_components.runtime_auto_off.const import (
     CONF_NAME,
     CONF_RETRY_INTERVAL_SECONDS,
     CONF_RULE_ID,
+    CONF_SHABBAT_ENTITY,
     CONF_TRIGGER_POLICY,
     DOMAIN,
 )
@@ -57,6 +58,12 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
         "light", "test", "other-light", suggested_object_id="other_light"
     )
     other_light = registry.async_update_entity(other_light.entity_id, area_id=other.id)
+    shabbat = registry.async_get_or_create(
+        "binary_sensor",
+        "test",
+        "shabbat-or-holiday",
+        suggested_object_id="shabbat_or_holiday",
+    )
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
@@ -89,6 +96,7 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
             CONF_DELAY: {"minutes": 45},
             CONF_RETRY_INTERVAL: {"seconds": 0},
             CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
+            CONF_SHABBAT_ENTITY: shabbat.entity_id,
         },
     )
     assert result["type"] is FlowResultType.FORM
@@ -110,6 +118,7 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
     assert entry.options[CONF_DELAY_SECONDS] == 2700
     assert entry.options[CONF_RETRY_INTERVAL_SECONDS] == 300
     assert entry.options[CONF_TRIGGER_POLICY] == TriggerPolicy.LAST.value
+    assert entry.options[CONF_SHABBAT_ENTITY] == shabbat.id
 
 
 async def test_old_options_default_retry_interval_to_existing_shutdown_time(
