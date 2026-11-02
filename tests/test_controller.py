@@ -564,6 +564,10 @@ async def test_stopping_wakes_and_cleans_up_state_confirmation(
     hass.states.async_set(LIGHT, STATE_ON)
     await hass.async_block_till_done()
     assert controller.deadline is not None
+    # Directly invoking the callback must consume the scheduled timer first,
+    # as Home Assistant's event scheduler does when a real deadline fires.
+    assert controller._unsub_deadline is not None
+    controller._unsub_deadline()
     execution = asyncio.create_task(
         controller._async_deadline_reached(
             controller._timer_generation, controller.deadline + timedelta(seconds=1)
@@ -602,6 +606,10 @@ async def test_cancelled_service_rearms_retry_in_live_controller(
     deadline = controller.deadline
     assert deadline is not None
 
+    # Keep direct invocation so cancellation propagation can be asserted,
+    # while consuming the timer that would normally have fired this callback.
+    assert controller._unsub_deadline is not None
+    controller._unsub_deadline()
     with pytest.raises(asyncio.CancelledError):
         await controller._async_deadline_reached(
             controller._timer_generation, deadline + timedelta(seconds=1)

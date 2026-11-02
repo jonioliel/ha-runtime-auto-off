@@ -110,6 +110,7 @@ async def test_user_flow_is_area_scoped_and_persists_registry_ids(
             CONF_DELAY: {"minutes": 45},
             CONF_RETRY_INTERVAL: {"minutes": 5},
             CONF_TRIGGER_POLICY: TriggerPolicy.LAST.value,
+            CONF_SHABBAT_ENTITY: shabbat.entity_id,
         },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
