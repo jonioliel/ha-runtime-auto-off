@@ -60,10 +60,14 @@ async def async_setup_entry(
         RuleConfig.from_mapping(_resolve_runtime_config(hass, entry)),
     )
     entry.runtime_data = controller
-    dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id,
-        **rule_device_info(entry, controller.config.name),
-    )
+    registry = dr.async_get(hass)
+    device_info = rule_device_info(entry, controller.config.name)
+    if hasattr(registry, "async_get_or_create_from_info"):
+        registry.async_get_or_create_from_info(
+            config_entry_id=entry.entry_id, device_info=device_info
+        )
+    else:
+        registry.async_get_or_create(config_entry_id=entry.entry_id, **device_info)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     try:

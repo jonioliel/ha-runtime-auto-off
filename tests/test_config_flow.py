@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import SERVICE_TURN_OFF
 from homeassistant.data_entry_flow import FlowResultType
@@ -12,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.runtime_auto_off.config_flow import (
     CONF_DELAY,
     CONF_RETRY_INTERVAL,
+    _turn_off_entities_in_area,
 )
 from custom_components.runtime_auto_off.const import (
     CONF_AREA_ID,
@@ -190,3 +192,22 @@ async def test_empty_area_never_exposes_an_unrestricted_picker(
     assert result["step_id"] == "entities"
     assert result["errors"] == {"base": "no_supported_entities"}
     assert result["data_schema"].schema == {}
+
+
+@pytest.mark.parametrize("platform", ["presence_auto_off", "runtime_auto_off"])
+async def test_rule_control_switches_are_excluded_from_target_picker(
+    hass: HomeAssistant, platform: str
+) -> None:
+    async def async_turn_off(_call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("switch", SERVICE_TURN_OFF, async_turn_off)
+    area = ar.async_get(hass).async_create("Room")
+    registry = er.async_get(hass)
+    entry = registry.async_get_or_create(
+        "switch", platform, "rule-enabled", suggested_object_id="rule_enabled"
+    )
+    registry.async_update_entity(entry.entity_id, area_id=area.id)
+
+    assert _turn_off_entities_in_area(hass, area.id) == []
+    assert _turn_off_entities_in_area(hass, area.id, [entry.entity_id]) == []

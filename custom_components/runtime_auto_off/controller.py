@@ -20,6 +20,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import (
     CALLBACK_TYPE,
+    CoreState,
     Event,
     EventStateChangedData,
     HomeAssistant,
@@ -31,6 +32,7 @@ from homeassistant.helpers.event import (
     async_track_point_in_utc_time,
     async_track_state_change_event,
 )
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -42,6 +44,7 @@ from .const import (
     ATTR_RULE_ID,
     DEFAULT_ENABLED,
     EVENT_ACTIVITY,
+    RULE_CONTROL_PLATFORMS,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
@@ -59,6 +62,7 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 _TARGET_SERVICE_TIMEOUT_SECONDS = 30.0
+_TARGET_STATE_CONFIRMATION_TIMEOUT_SECONDS = 5.0
 
 StateListener = Callable[[], None]
 ActivityListener = Callable[[ActivityEvent], None]
@@ -97,6 +101,14 @@ class RuntimeAutoOffController:
             self._stable_key_by_entity[entity_id] = (
                 registry_id if registry_id is not None else f"entity:{entity_id}"
             )
+        shabbat_entry = (
+            registry.async_get(self.config.shabbat_entity)
+            if self.config.shabbat_entity is not None
+            else None
+        )
+        self._shabbat_registry_id = (
+            shabbat_entry.id if shabbat_entry is not None else None
+        )
 
         self._store = Store[dict[str, Any]](
             hass,
@@ -110,6 +122,7 @@ class RuntimeAutoOffController:
         self._execution_tasks: set[asyncio.Task[Any]] = set()
         self._execution_idle = asyncio.Event()
         self._execution_idle.set()
+        self._confirmation_waiters: set[asyncio.Event] = set()
 
         self._enabled = DEFAULT_ENABLED
         self._action_inhibited = not DEFAULT_ENABLED
@@ -128,8 +141,10 @@ class RuntimeAutoOffController:
         self._activity_listeners: set[ActivityListener] = set()
         self._unsub_state: CALLBACK_TYPE | None = None
         self._unsub_deadline: CALLBACK_TYPE | None = None
+        self._unsub_started: CALLBACK_TYPE | None = None
         self._timer_generation = 0
         self._setup_complete = False
+        self._starting = False
         self._unloaded = False
 
     @property
@@ -246,9 +261,20 @@ class RuntimeAutoOffController:
             async with self._lock:
                 self._unloaded = False
                 self._restore_locked(stored)
+                self._apply_retry_interval_change_locked(dt_util.utcnow())
+                if self.hass.state is not CoreState.running:
+                    self._starting = True
+                    self._setup_complete = True
+                    self._action_inhibited = not self._enabled
+                    if not self._enabled:
+                        self._status = Status.DISABLED
+                    self._unsub_started = async_at_started(
+                        self.hass, self._async_started
+                    )
+                    self._notify_state_listeners()
+                    return
                 self._sync_cycles_locked()
                 now = dt_util.utcnow()
-                self._apply_retry_interval_change_locked(now)
                 self._rearm_interrupted_cycles_locked(now)
                 plan, activity = self._reconcile_locked(now)
                 self._setup_complete = True
@@ -263,14 +289,34 @@ class RuntimeAutoOffController:
             self._rollback_failed_setup()
             raise
 
+    async def _async_started(self, _hass: HomeAssistant) -> None:
+        """Reconcile restored state once entity platforms have finished starting."""
+        async with self._lock:
+            self._unsub_started = None
+            if self._unloaded or not self._starting:
+                return
+            self._starting = False
+            self._sync_cycles_locked()
+            now = dt_util.utcnow()
+            self._rearm_interrupted_cycles_locked(now)
+            plan, activity = self._reconcile_locked(now)
+            await self._async_save_locked(force=True)
+        self._notify_state_listeners()
+        if activity is not None:
+            self._publish_activity(activity)
+        if plan is not None:
+            await self._async_execute(plan)
+
     async def async_stop(self) -> None:
         """Stop new work and wait for every running service call."""
         self._unsubscribe_state_changes()
+        self._cancel_startup()
         if self._unloaded:
             await self._execution_idle.wait()
             return
         self._unloaded = True
         self._action_inhibited = True
+        self._wake_confirmation_waiters()
         async with self._lock:
             self._cancel_deadline_locked()
             try:
@@ -292,7 +338,16 @@ class RuntimeAutoOffController:
             async with self._lock:
                 self._unloaded = False
                 self._action_inhibited = not self._enabled
+                if self._starting and self.hass.state is not CoreState.running:
+                    self._unsub_started = async_at_started(
+                        self.hass, self._async_started
+                    )
+                    return
                 self._sync_cycles_locked()
+                if self._starting:
+                    self._starting = False
+                    now = dt_util.utcnow()
+                    self._rearm_interrupted_cycles_locked(now)
                 plan, activity = self._reconcile_locked(dt_util.utcnow())
                 await self._async_save_locked()
             self._notify_state_listeners()
@@ -302,6 +357,7 @@ class RuntimeAutoOffController:
                 await self._async_execute(plan)
         except BaseException:
             self._unsubscribe_state_changes()
+            self._cancel_startup()
             self._cancel_deadline_locked()
             self._unloaded = True
             self._action_inhibited = True
@@ -317,14 +373,19 @@ class RuntimeAutoOffController:
         """Persistently enable or pause this rule."""
         if not enabled:
             self._action_inhibited = True
+            self._wake_confirmation_waiters()
         async with self._lock:
             if self._unloaded or enabled == self._enabled:
                 return
             self._enabled = enabled
             if enabled:
                 self._action_inhibited = False
-                self._sync_cycles_locked()
-                plan, activity = self._reconcile_locked(dt_util.utcnow())
+                if self._starting:
+                    self._status = Status.INITIALIZING
+                    plan, activity = None, None
+                else:
+                    self._sync_cycles_locked()
+                    plan, activity = self._reconcile_locked(dt_util.utcnow())
             else:
                 self._cancel_deadline_locked()
                 self._status = Status.DISABLED
@@ -343,6 +404,13 @@ class RuntimeAutoOffController:
         """Reconcile selected entity state changes."""
         async with self._lock:
             if not self._setup_complete or self._unloaded:
+                return
+            if self._starting:
+                # Actual OFF reports must reset a durable active clock even
+                # during startup; only service execution waits for HA readiness.
+                self._sync_cycles_locked(event)
+                await self._async_save_locked()
+                self._notify_state_listeners()
                 return
             previous_deadline = self._next_deadline
             self._sync_cycles_locked(event)
@@ -502,6 +570,35 @@ class RuntimeAutoOffController:
         try:
             async with self._execution_lock:
                 await self._async_execute_serialized(plan)
+        except asyncio.CancelledError:
+            # A cancelled service/confirmation must not leave durable claims
+            # permanently handled with no retry timer in the live controller.
+            async with self._lock:
+                now = max(dt_util.utcnow(), plan.claimed_at)
+                self._sync_cycles_locked()
+                rearmed = self._rearm_interrupted_cycles_locked(now)
+                if rearmed and not self._unloaded:
+                    followup, activity = self._reconcile_locked(now)
+                    if followup is not None:
+                        # Yield through the scheduler before another attempt;
+                        # cancellation recovery must not run another service.
+                        self._cycles = {
+                            key: replace(cycle, handled=False)
+                            for key, cycle in self._cycles.items()
+                        }
+                        self._schedule_deadline_locked(now)
+                    if activity is not None:
+                        self._publish_activity(activity)
+                try:
+                    await self._async_save_locked(force=True)
+                except Exception:
+                    _LOGGER.warning(
+                        "Could not persist interrupted runtime rule %s",
+                        self.config.rule_id,
+                        exc_info=True,
+                    )
+            self._notify_state_listeners()
+            raise
         finally:
             self._execution_tasks.discard(task)
             if not self._execution_tasks:
@@ -558,13 +655,11 @@ class RuntimeAutoOffController:
                     exc_info=True,
                 )
             else:
-                post_error = self._target_runtime_error(entity_id)
-                if post_error == "already_off":
+                post_error = await self._async_confirm_turn_off(entity_id)
+                if post_error is None:
                     successful.append(entity_id)
-                elif post_error is None:
-                    failed[entity_id] = "turn_off_not_confirmed"
                 else:
-                    failed[entity_id] = f"post_turn_off_{post_error}"
+                    failed[entity_id] = post_error
 
         occurred_at = dt_util.utcnow()
         retry_base = max(occurred_at, plan.claimed_at)
@@ -622,6 +717,51 @@ class RuntimeAutoOffController:
             self._publish_activity(followup_activity)
         if followup_plan is not None:
             await self._async_execute_serialized(followup_plan)
+
+    async def _async_confirm_turn_off(self, entity_id: str) -> str | None:
+        """Allow asynchronously reported device state a bounded time to settle."""
+        changed = asyncio.Event()
+
+        @callback
+        def state_changed(_event: Event[EventStateChangedData]) -> None:
+            changed.set()
+
+        tracked = [entity_id]
+        if self.config.shabbat_entity is not None:
+            tracked.append(self.config.shabbat_entity)
+        unsubscribe = async_track_state_change_event(self.hass, tracked, state_changed)
+        self._confirmation_waiters.add(changed)
+
+        def result() -> str | None:
+            error = self._target_runtime_error(entity_id)
+            if error == "already_off":
+                return None
+            if error is not None:
+                return f"post_turn_off_{error}"
+            if self._unloaded or self._action_inhibited:
+                return "controller_stopped"
+            if block := self._shabbat_block_reason():
+                return block
+            return "turn_off_not_confirmed"
+
+        try:
+            async with asyncio.timeout(_TARGET_STATE_CONFIRMATION_TIMEOUT_SECONDS):
+                while True:
+                    changed.clear()
+                    outcome = result()
+                    if outcome != "turn_off_not_confirmed":
+                        return outcome
+                    await changed.wait()
+        except TimeoutError:
+            return result()
+        finally:
+            unsubscribe()
+            self._confirmation_waiters.discard(changed)
+
+    @callback
+    def _wake_confirmation_waiters(self) -> None:
+        for waiter in self._confirmation_waiters:
+            waiter.set()
 
     def _apply_retry_interval_change_locked(self, now: datetime) -> bool:
         """Recalculate persisted retry deadlines after an options change."""
@@ -734,6 +874,8 @@ class RuntimeAutoOffController:
         elif entry is not None:
             return "entity_identity_changed"
         if entry is not None:
+            if entry.platform in RULE_CONTROL_PLATFORMS:
+                return "rule_control_target"
             if entry.disabled:
                 return "disabled"
             if effective_area_id(self.hass, entry) != self.config.area_id:
@@ -759,8 +901,14 @@ class RuntimeAutoOffController:
         """Return why the optional combined Shabbat/holiday gate blocks actions."""
         if self.config.shabbat_entity is None:
             return None
+        entry = er.async_get(self.hass).async_get(self.config.shabbat_entity)
+        if (
+            entry is not None
+            and (entry.disabled or entry.id != self._shabbat_registry_id)
+        ) or (entry is None and self._shabbat_registry_id is not None):
+            return "sensor_unavailable"
         state = self.hass.states.get(self.config.shabbat_entity)
-        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+        if state is None or state.state not in (STATE_ON, STATE_OFF):
             return "sensor_unavailable"
         if state.state == STATE_ON:
             return "shabbat_or_holiday"
@@ -806,8 +954,15 @@ class RuntimeAutoOffController:
             self._unsub_state = None
 
     @callback
+    def _cancel_startup(self) -> None:
+        if self._unsub_started is not None:
+            self._unsub_started()
+            self._unsub_started = None
+
+    @callback
     def _rollback_failed_setup(self) -> None:
         self._unsubscribe_state_changes()
+        self._cancel_startup()
         self._cancel_deadline_locked()
         self._cycles.clear()
         self._setup_complete = False

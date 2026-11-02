@@ -3,6 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "runtime_auto_off"
+RULE_CONTROL_PLATFORMS: Final = frozenset({"presence_auto_off", "runtime_auto_off"})
 
 CONF_NAME: Final = "name"
 CONF_AREA_ID: Final = "area_id"

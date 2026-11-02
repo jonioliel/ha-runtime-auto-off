@@ -12,5 +12,13 @@ def effective_area_id(hass: HomeAssistant, entry: RegistryEntry) -> str | None:
         return entry.area_id
     if entry.device_id is None:
         return None
-    device = dr.async_get(hass).async_get(entry.device_id)
-    return device.area_id if device is not None else None
+    registry = dr.async_get(hass)
+    device = registry.async_get(entry.device_id)
+    seen: set[str] = set()
+    while device is not None and device.id not in seen:
+        seen.add(device.id)
+        if device.area_id is not None:
+            return device.area_id
+        parent_id = getattr(device, "parent_device_id", None)
+        device = registry.async_get(parent_id) if parent_id is not None else None
+    return None

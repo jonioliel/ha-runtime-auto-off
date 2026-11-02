@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    EVENT_HOMEASSISTANT_STARTED,
     SERVICE_TURN_OFF,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import split_entity_id
+from homeassistant.core import CoreState, split_entity_id
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
@@ -36,6 +39,22 @@ AREA_ID = "test_room"
 LIGHT = "light.room"
 SWITCH = "switch.room"
 SHABBAT = "binary_sensor.shabbat_or_holiday"
+
+
+@pytest.fixture(autouse=True)
+def running_home_assistant(hass: HomeAssistant) -> None:
+    """Controller unit tests normally exercise an already running instance."""
+    hass.set_state(CoreState.running)
+
+
+@pytest.fixture(autouse=True)
+def short_confirmation_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep intentionally unconfirmed device tests fast."""
+    monkeypatch.setattr(
+        "custom_components.runtime_auto_off.controller."
+        "_TARGET_STATE_CONFIRMATION_TIMEOUT_SECONDS",
+        0.01,
+    )
 
 
 @dataclass(slots=True)
@@ -158,7 +177,9 @@ async def test_shabbat_sensor_blocks_shutdown_until_special_day_ends(
     await hass.async_block_till_done()
 
     assert turn_off_recorder.calls == [LIGHT]
-    assert hass.states[LIGHT].state == STATE_OFF
+    state = hass.states.get(LIGHT)
+    assert state is not None
+    assert state.state == STATE_OFF
 
 
 async def test_unavailable_shabbat_sensor_fails_closed(
@@ -173,6 +194,152 @@ async def test_unavailable_shabbat_sensor_fails_closed(
     )
 
     assert controller.status is Status.SENSOR_UNAVAILABLE
+    assert turn_off_recorder.calls == []
+
+
+@pytest.mark.parametrize("state", ["unexpected", "", "unknown"])
+async def test_invalid_shabbat_state_fails_closed(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+    state: str,
+) -> None:
+    hass.states.async_set(SHABBAT, state)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=0, entities=(LIGHT,), shabbat_entity=SHABBAT)
+    )
+
+    assert controller.status is Status.SENSOR_UNAVAILABLE
+    assert turn_off_recorder.calls == []
+
+
+@pytest.mark.parametrize("change", ["disabled", "replaced"])
+async def test_changed_shabbat_sensor_identity_fails_closed(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+    change: str,
+) -> None:
+    registry = er.async_get(hass)
+    sensor = registry.async_get_or_create(
+        "binary_sensor", "test", "shabbat", suggested_object_id="shabbat_or_holiday"
+    )
+    assert sensor.entity_id == SHABBAT
+    hass.states.async_set(SHABBAT, STATE_ON)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=0, entities=(LIGHT,), shabbat_entity=SHABBAT)
+    )
+    if change == "disabled":
+        registry.async_update_entity(SHABBAT, disabled_by=er.RegistryEntryDisabler.USER)
+    else:
+        registry.async_remove(SHABBAT)
+        hass.states.async_remove(SHABBAT)
+        replacement = registry.async_get_or_create(
+            "binary_sensor",
+            "test",
+            "replacement-shabbat",
+            suggested_object_id="shabbat_or_holiday",
+        )
+        assert replacement.entity_id == SHABBAT
+    hass.states.async_set(SHABBAT, STATE_OFF)
+    await hass.async_block_till_done()
+
+    assert controller.status is Status.SENSOR_UNAVAILABLE
+    assert turn_off_recorder.calls == []
+
+
+async def test_startup_waits_for_home_assistant_before_executing(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.set_state(CoreState.starting)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(_config(delay=0, entities=(LIGHT,)))
+
+    assert controller.status is Status.INITIALIZING
+    assert turn_off_recorder.calls == []
+    hass.states.async_set(LIGHT, STATE_ON, {"brightness": 50})
+    await hass.async_block_till_done()
+    assert turn_off_recorder.calls == []
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == [LIGHT]
+
+
+async def test_unload_cancels_pending_startup(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.set_state(CoreState.starting)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(_config(delay=0, entities=(LIGHT,)))
+    await controller.async_unload()
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert turn_off_recorder.calls == []
+
+
+async def test_startup_publishes_restored_disabled_state(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+) -> None:
+    config = _config(entities=(LIGHT,))
+    first = await controller_factory(config, "disabled-startup-entry")
+    await first.async_set_enabled(False)
+    await first.async_unload()
+    hass.set_state(CoreState.starting)
+    restarted = RuntimeAutoOffController(hass, "disabled-startup-entry", config)
+    listener = Mock()
+    restarted.async_add_listener(listener)
+    try:
+        await restarted.async_setup()
+        assert restarted.enabled is False
+        assert restarted.status is Status.DISABLED
+        listener.assert_called_once_with()
+    finally:
+        await restarted.async_unload()
+
+
+async def test_startup_off_then_on_resets_persisted_active_clock(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    config = _config(delay=600, entities=(LIGHT,))
+    hass.states.async_set(LIGHT, STATE_ON)
+    first = await controller_factory(config, "startup-cycle-entry")
+    original_started_at = first.active_since[LIGHT]
+    await first.async_unload()
+    hass.set_state(CoreState.starting)
+    restarted = await controller_factory(config, "startup-cycle-entry")
+    assert restarted.active_since[LIGHT] == original_started_at
+
+    hass.states.async_set(LIGHT, STATE_OFF)
+    await hass.async_block_till_done()
+    assert restarted.active_since == {}
+    hass.states.async_set(LIGHT, STATE_ON)
+    state = hass.states.get(LIGHT)
+    assert state is not None
+    new_started_at = state.last_changed
+    await hass.async_block_till_done()
+    assert restarted.active_since[LIGHT] == new_started_at
+    assert restarted.deadline is None
+    assert turn_off_recorder.calls == []
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert restarted.deadline == new_started_at + timedelta(seconds=600)
     assert turn_off_recorder.calls == []
 
 
@@ -350,6 +517,102 @@ async def test_unconfirmed_turn_off_is_failed_and_retried(
     assert controller.deadline is None
 
 
+async def test_delayed_off_report_is_confirmed_without_false_failure(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.runtime_auto_off.controller."
+        "_TARGET_STATE_CONFIRMATION_TIMEOUT_SECONDS",
+        1,
+    )
+    calls: list[str] = []
+
+    async def delayed_turn_off(call: ServiceCall) -> None:
+        calls.append(call.data[ATTR_ENTITY_ID])
+        asyncio.get_running_loop().call_later(
+            0.01, hass.states.async_set, LIGHT, STATE_OFF
+        )
+
+    hass.services.async_register("light", SERVICE_TURN_OFF, delayed_turn_off)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(_config(delay=0, entities=(LIGHT,)))
+    await hass.async_block_till_done()
+
+    assert calls == [LIGHT]
+    assert controller.last_execution is not None
+    assert controller.last_execution.successful_entities == (LIGHT,)
+    assert controller.last_execution.failed_entities == {}
+    assert controller.deadline is None
+    assert not controller._confirmation_waiters
+
+
+async def test_stopping_wakes_and_cleans_up_state_confirmation(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.runtime_auto_off.controller."
+        "_TARGET_STATE_CONFIRMATION_TIMEOUT_SECONDS",
+        60,
+    )
+    turn_off_recorder.ignored.add(LIGHT)
+    controller = await controller_factory(_config(delay=600, entities=(LIGHT,)))
+    hass.states.async_set(LIGHT, STATE_ON)
+    await hass.async_block_till_done()
+    assert controller.deadline is not None
+    execution = asyncio.create_task(
+        controller._async_deadline_reached(
+            controller._timer_generation, controller.deadline + timedelta(seconds=1)
+        )
+    )
+    try:
+        async with asyncio.timeout(1):
+            while not controller._confirmation_waiters:
+                await asyncio.sleep(0)
+        await asyncio.wait_for(controller.async_stop(), 1)
+        await execution
+        assert not controller._confirmation_waiters
+        assert controller.last_execution is not None
+        assert controller.last_execution.failed_entities == {
+            LIGHT: "controller_stopped"
+        }
+    finally:
+        if not execution.done():
+            execution.cancel()
+            await asyncio.gather(execution, return_exceptions=True)
+
+
+async def test_cancelled_service_rearms_retry_in_live_controller(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+) -> None:
+    async def cancelled_turn_off(_call: ServiceCall) -> None:
+        raise asyncio.CancelledError
+
+    hass.services.async_register("light", SERVICE_TURN_OFF, cancelled_turn_off)
+    controller = await controller_factory(
+        _config(delay=600, retry_interval=60, entities=(LIGHT,))
+    )
+    hass.states.async_set(LIGHT, STATE_ON)
+    await hass.async_block_till_done()
+    deadline = controller.deadline
+    assert deadline is not None
+
+    with pytest.raises(asyncio.CancelledError):
+        await controller._async_deadline_reached(
+            controller._timer_generation, deadline + timedelta(seconds=1)
+        )
+
+    assert controller.status is Status.COUNTDOWN
+    assert controller.next_shutdown_kind is ShutdownKind.RETRY
+    assert controller.deadline == deadline + timedelta(seconds=61)
+    assert controller.diagnostics["active_cycles"][0]["handled"] is False
+
+
 async def test_handled_cycle_does_not_replay_after_restart(
     hass: HomeAssistant,
     controller_factory: ControllerFactory,
@@ -498,3 +761,21 @@ async def test_moved_entity_is_never_called(
 
     assert turn_off_recorder.calls == []
     assert controller.status is Status.SENSOR_UNAVAILABLE
+
+
+@pytest.mark.parametrize("platform", ["presence_auto_off", "runtime_auto_off"])
+async def test_rule_control_switch_is_never_a_shutdown_target(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+    platform: str,
+) -> None:
+    entry = er.async_get(hass).async_get_or_create(
+        "switch", platform, "rule-enabled", suggested_object_id="room"
+    )
+    assert entry.entity_id == SWITCH
+    hass.states.async_set(SWITCH, STATE_ON)
+    controller = await controller_factory(_config(delay=0, entities=(SWITCH,)))
+
+    assert turn_off_recorder.calls == []
+    assert controller.unavailable_entities == {SWITCH: "rule_control_target"}

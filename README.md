@@ -61,6 +61,24 @@
 ה־Device כולל קישור ישיר להגדרות האינטגרציה, ולכן אפשר לערוך ממנו את
 החדר, הרכיבים ושני הזמנים.
 
+## עבודה לצד Presence Auto-Off ופתרון תקלות
+
+אפשר להפעיל את שתי האינטגרציות במקביל. לכל כלל טיימר ותנאי שבת/חג משלו;
+כדי לחסום את שתיהן בשבת יש להגדיר את התנאי בכל כלל מתאים. מתגי הפעלת
+כללי Presence ו־Runtime אינם יכולים לשמש כיעדי כיבוי.
+
+לאחר קריאת כיבוי האינטגרציה ממתינה עד 5 שניות לאישור `off` מהמכשיר,
+בנוסף לגבול של 30 שניות לקריאת השירות. כך דיווח מצב שמתעכב מעט אינו
+מסומן בטעות ככשל. אם לא מתקבל אישור, נשמר הכשל ומתוזמן ניסיון חוזר
+לפי מרווח הבדיקה. אין שליחת פקודות נוספות בזמן ההמתנה לאישור.
+
+מצב `off` אמיתי מסיים את מחזור הפעולה. אם הרכיב נדלק שוב מיד לאחר מכן,
+כולל על ידי שחזור של Presence Auto-Off או אוטומציה אחרת, מתחיל מחזור חדש
+עם הזמן המרבי שהוגדר. כדי לזהות מה הדליק את הרכיב מחדש, בודקים את
+היסטוריית הישות והאוטומציות; מרווח הניסיון החוזר חל על מחזור שלא הסתיים.
+
+לאחר אתחול, טיימרים שמורים נטענים מיד ופעולות ממתינות עד לסיום עליית HA.
+
 ## התקנה דרך HACS
 
 1. פותחים HACS ובוחרים **Custom repositories**.
@@ -88,3 +106,17 @@ until an actual off state is observed.
 Retry deadlines survive restarts, and service success is accepted only when Home
 Assistant confirms the entity is off. The integration
 creates one first-class Home Assistant device per rule and supports full UI editing.
+
+## פיתוח ובדיקות
+
+```bash
+python -m pip install -r requirements_test.txt
+ruff check .
+ruff format --check custom_components tests
+python -m pytest
+```
+
+`requirements_test.txt` בודק מול HA 2026.10.4, וקובץ
+`requirements_test_min.txt` שומר על בסיס HA 2026.8.1. CI מריץ את שני
+הבסיסים וגם את חבילת הבדיקות העדכנית פעם בשבוע על Linux. חבילת בדיקות
+HA המלאה דורשת סביבת Linux; Ruff וקומפילציה ב־Windows אינם מחליפים אותה.

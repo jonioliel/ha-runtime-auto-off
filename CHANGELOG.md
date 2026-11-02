@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.2] - 2026-11-02
+
+- Wait up to five seconds for asynchronously reported `off` states after service
+  completion, avoiding false `turn_off_not_confirmed` errors on working devices.
+- Clean up state-confirmation listeners on completion, cancellation and unload;
+  rearm retry timers after interrupted execution.
+- Defer startup reconciliation and service calls until Home Assistant is running.
+- Validate the Shabbat sensor's registry identity and require explicit `off`
+  before allowing shutdown; invalid, disabled or replaced sensors fail closed.
+- Honor child-device areas inherited from their parent in newer HA versions.
+- Prevent Presence/Runtime Auto-Off rule switches from being selected or executed
+  as targets, and support modern device registry registration.
+- Keep diagnostics available for disabled or not-yet-loaded entries.
+- Add regression coverage and a weekly Linux CI matrix for the minimum supported
+  HA test baseline, pinned HA 2026.10.4, and the latest available test helper.
+
 ## [1.4.1] - 2026-08-20
 
 - Added automatic GitHub Release publication for version tags so HACS can discover new versions reliably.

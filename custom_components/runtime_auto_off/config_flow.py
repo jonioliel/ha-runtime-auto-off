@@ -43,6 +43,7 @@ from .const import (
     DEFAULT_DELAY_SECONDS,
     DEFAULT_RETRY_INTERVAL_SECONDS,
     DOMAIN,
+    RULE_CONTROL_PLATFORMS,
 )
 from .helpers import effective_area_id
 from .models import TriggerPolicy
@@ -132,13 +133,19 @@ def _turn_off_entities_in_area(
         entry.entity_id
         for entry in registry.entities.values()
         if not entry.disabled
+        and entry.platform not in RULE_CONTROL_PLATFORMS
         and effective_area_id(hass, entry) == area_id
         and hass.services.has_service(
             split_entity_id(entry.entity_id)[0], SERVICE_TURN_OFF
         )
     }
     resolved_selected, _ = _resolve_entity_ids(hass, selected or [])
-    candidates.update(resolved_selected)
+    candidates.update(
+        entity_id
+        for entity_id in resolved_selected
+        if (entry := registry.async_get(entity_id)) is None
+        or entry.platform not in RULE_CONTROL_PLATFORMS
+    )
     return sorted(candidates)
 
 
@@ -174,6 +181,7 @@ class _RuleFlowMixin:
         selected = _display_entity_ids(
             self.hass, list(self._working.get(CONF_ENTITIES, []))
         )
+        selected = [entity_id for entity_id in selected if entity_id in candidates]
         return vol.Schema(
             {
                 vol.Required(CONF_ENTITIES, default=selected): EntitySelector(
