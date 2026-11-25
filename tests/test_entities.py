@@ -72,6 +72,7 @@ async def test_rule_device_owns_every_generated_entity(hass: HomeAssistant) -> N
         f"{rule_id}_last_shutdown",
         f"{rule_id}_next_shutdown",
         f"{rule_id}_next_shutdown_kind",
+        f"{rule_id}_problem",
         f"{rule_id}_retry_interval",
         f"{rule_id}_status",
         f"{rule_id}_trigger_active_since",
