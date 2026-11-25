@@ -561,7 +561,7 @@ async def test_changed_conditions_prevent_immediate_retry(
         elif change == "device":
             hass.states.async_set(LIGHT, STATE_ON, {"brightness": 100})
         else:
-            controller.async_inhibit_actions()
+            await controller.async_set_enabled(False)
 
     hass.services.async_register("light", SERVICE_TURN_OFF, changed_during_command)
     assert controller.deadline is not None
