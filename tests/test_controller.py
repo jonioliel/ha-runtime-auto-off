@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.const import (
@@ -499,7 +499,7 @@ async def test_unconfirmed_turn_off_is_failed_and_retried(
     async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
 
-    assert turn_off_recorder.calls == [LIGHT]
+    assert turn_off_recorder.calls == [LIGHT, LIGHT]
     assert controller.last_execution is not None
     assert controller.last_execution.failed_entities == {
         LIGHT: "turn_off_not_confirmed"
@@ -511,10 +511,62 @@ async def test_unconfirmed_turn_off_is_failed_and_retried(
     async_fire_time_changed(hass, retry_deadline + timedelta(seconds=1))
     await hass.async_block_till_done()
 
-    assert turn_off_recorder.calls == [LIGHT, LIGHT]
+    assert turn_off_recorder.calls == [LIGHT, LIGHT, LIGHT]
     assert hass.states.get(LIGHT) is not None
     assert hass.states.get(LIGHT).state == STATE_OFF
     assert controller.deadline is None
+
+
+async def test_missed_command_gets_one_immediate_retry(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(_config(delay=60, entities=(LIGHT,)))
+
+    async def missed_first_command(call: ServiceCall) -> None:
+        turn_off_recorder.calls.append(call.data[ATTR_ENTITY_ID])
+        if len(turn_off_recorder.calls) == 2:
+            hass.states.async_set(LIGHT, STATE_OFF)
+
+    hass.services.async_register("light", SERVICE_TURN_OFF, missed_first_command)
+    assert controller.deadline is not None
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    assert turn_off_recorder.calls == [LIGHT, LIGHT]
+    assert controller.last_execution is not None
+    assert controller.last_execution.successful_entities == (LIGHT,)
+    assert not controller.last_execution.failed_entities
+    assert controller.deadline is None
+
+
+async def test_lost_execution_claim_sends_no_command_and_rearms(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=60, retry_interval=30, entities=(LIGHT,))
+    )
+    deadline = controller.deadline
+    assert deadline is not None
+    with patch.object(
+        controller._store, "async_save", AsyncMock(side_effect=OSError("disk failure"))
+    ):
+        async_fire_time_changed(hass, deadline + timedelta(seconds=1))
+        await hass.async_block_till_done()
+    assert turn_off_recorder.calls == []
+    assert controller.deadline is not None
+    assert controller.deadline > deadline
+    assert controller.last_execution is not None
+    assert controller.last_execution.failed_entities == {
+        LIGHT: "execution_persist_failed"
+    }
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    assert turn_off_recorder.calls == [LIGHT]
 
 
 async def test_delayed_off_report_is_confirmed_without_false_failure(

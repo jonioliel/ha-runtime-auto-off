@@ -200,6 +200,16 @@ class RuntimeAutoOffController:
         return self._last_activity
 
     @property
+    def target_issues(self) -> dict[str, str]:
+        """Report invalid selected targets, including those currently inactive."""
+        issues = {}
+        for entity_id in self.config.entities:
+            error = self._target_runtime_error(entity_id)
+            if error is not None and error != "already_off":
+                issues[entity_id] = error
+        return issues
+
+    @property
     def diagnostics(self) -> dict[str, Any]:
         return {
             "entry_id": self.entry_id,
@@ -207,6 +217,8 @@ class RuntimeAutoOffController:
             "config": self.config.as_dict(),
             "enabled": self.enabled,
             "status": self.status.value,
+            "target_issues": self.target_issues,
+            "timer_armed": self._unsub_deadline is not None,
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "next_shutdown_kind": (
                 self.next_shutdown_kind.value if self.next_shutdown_kind else None
@@ -278,7 +290,10 @@ class RuntimeAutoOffController:
                 self._rearm_interrupted_cycles_locked(now)
                 plan, activity = self._reconcile_locked(now)
                 self._setup_complete = True
-                await self._async_save_locked(force=True)
+                if not await self._async_save_execution_boundary_locked(
+                    plan, force=True
+                ):
+                    plan, activity = None, self._last_activity
                 self._action_inhibited = not self._enabled
             self._notify_state_listeners()
             if activity is not None:
@@ -300,7 +315,8 @@ class RuntimeAutoOffController:
             now = dt_util.utcnow()
             self._rearm_interrupted_cycles_locked(now)
             plan, activity = self._reconcile_locked(now)
-            await self._async_save_locked(force=True)
+            if not await self._async_save_execution_boundary_locked(plan, force=True):
+                plan, activity = None, self._last_activity
         self._notify_state_listeners()
         if activity is not None:
             self._publish_activity(activity)
@@ -349,7 +365,8 @@ class RuntimeAutoOffController:
                     now = dt_util.utcnow()
                     self._rearm_interrupted_cycles_locked(now)
                 plan, activity = self._reconcile_locked(dt_util.utcnow())
-                await self._async_save_locked()
+                if not await self._async_save_execution_boundary_locked(plan):
+                    plan, activity = None, self._last_activity
             self._notify_state_listeners()
             if activity is not None:
                 self._publish_activity(activity)
@@ -393,7 +410,8 @@ class RuntimeAutoOffController:
                 activity = self._new_activity_locked(
                     ActivityEventType.CANCELLED, {"reason": "controller_disabled"}
                 )
-            await self._async_save_locked()
+            if not await self._async_save_execution_boundary_locked(plan):
+                plan, activity = None, self._last_activity
         self._notify_state_listeners()
         if activity is not None:
             self._publish_activity(activity)
@@ -425,7 +443,8 @@ class RuntimeAutoOffController:
                     ActivityEventType.CANCELLED,
                     {"reason": "no_pending_active_cycle"},
                 )
-            await self._async_save_locked()
+            if not await self._async_save_execution_boundary_locked(plan):
+                plan, activity = None, self._last_activity
         self._notify_state_listeners()
         if activity is not None:
             self._publish_activity(activity)
@@ -441,7 +460,8 @@ class RuntimeAutoOffController:
             self._next_deadline = None
             self._sync_cycles_locked()
             plan, activity = self._reconcile_locked(dt_util.as_utc(_now))
-            await self._async_save_locked()
+            if not await self._async_save_execution_boundary_locked(plan):
+                plan, activity = None, self._last_activity
         self._notify_state_listeners()
         if activity is not None:
             self._publish_activity(activity)
@@ -560,6 +580,40 @@ class RuntimeAutoOffController:
             None,
         )
 
+    async def _async_save_execution_boundary_locked(
+        self, plan: _ExecutionPlan | None, *, force: bool = False
+    ) -> bool:
+        """Never send an unpersisted command or abandon its retry clock."""
+        try:
+            await self._async_save_locked(force=force)
+        except Exception:
+            if plan is None:
+                raise
+            _LOGGER.exception(
+                "Could not persist runtime shutdown boundary for %s; no command sent",
+                self.config.rule_id,
+            )
+            now = max(dt_util.utcnow(), plan.claimed_at)
+            self._rearm_interrupted_cycles_locked(now)
+            self._reconcile_locked(now)
+            self._status = Status.ERROR
+            self._last_execution = LastExecution(
+                trigger_entity=plan.trigger_entity,
+                occurred_at=now,
+                successful_entities=(),
+                skipped_entities={},
+                failed_entities={
+                    entity_id: "execution_persist_failed"
+                    for entity_id in plan.target_entities
+                },
+            )
+            self._new_activity_locked(
+                ActivityEventType.FAILED,
+                {"failed_entities": dict(self._last_execution.failed_entities)},
+            )
+            return False
+        return True
+
     async def _async_execute(self, plan: _ExecutionPlan) -> None:
         """Serialize an automatic shutdown and track it for unload."""
         task = asyncio.current_task()
@@ -570,7 +624,7 @@ class RuntimeAutoOffController:
         try:
             async with self._execution_lock:
                 await self._async_execute_serialized(plan)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             # A cancelled service/confirmation must not leave durable claims
             # permanently handled with no retry timer in the live controller.
             async with self._lock:
@@ -636,6 +690,7 @@ class RuntimeAutoOffController:
                 failed[entity_id] = error
                 continue
             domain = split_entity_id(entity_id)[0]
+            pre_state = self.hass.states.get(entity_id)
             try:
                 async with asyncio.timeout(_TARGET_SERVICE_TIMEOUT_SECONDS):
                     await self.hass.services.async_call(
@@ -656,6 +711,29 @@ class RuntimeAutoOffController:
                 )
             else:
                 post_error = await self._async_confirm_turn_off(entity_id)
+                # Retry a missed command once, without crossing a new device
+                # activation, a changed selection, or a closed safety gate.
+                if (
+                    post_error == "turn_off_not_confirmed"
+                    and not self._unloaded
+                    and not self._action_inhibited
+                    and self._shabbat_block_reason() is None
+                    and self._target_runtime_error(entity_id) is None
+                    and self.hass.states.get(entity_id) is pre_state
+                ):
+                    try:
+                        async with asyncio.timeout(_TARGET_SERVICE_TIMEOUT_SECONDS):
+                            await self.hass.services.async_call(
+                                domain,
+                                SERVICE_TURN_OFF,
+                                {ATTR_ENTITY_ID: entity_id},
+                                blocking=True,
+                            )
+                        post_error = await self._async_confirm_turn_off(entity_id)
+                    except TimeoutError:
+                        post_error = "service_timeout"
+                    except Exception as err:
+                        post_error = type(err).__name__
                 if post_error is None:
                     successful.append(entity_id)
                 else:

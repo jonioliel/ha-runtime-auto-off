@@ -120,3 +120,10 @@ python -m pytest
 `requirements_test_min.txt` שומר על בסיס HA 2026.8.1. CI מריץ את שני
 הבסיסים וגם את חבילת הבדיקות העדכנית פעם בשבוע על Linux. חבילת בדיקות
 HA המלאה דורשת סביבת Linux; Ruff וקומפילציה ב־Windows אינם מחליפים אותה.
+
+
+### Unconfirmed shutdown recovery
+
+A command that returns without an OFF report gets at most one immediate retry after the bounded confirmation wait. The second command requires the original unchanged device state and all safety gates to remain valid. Service errors, state changes, or closed gates fall back to the configured retry policy. An OFF report is Home Assistant telemetry; it is not independent proof of the physical device state.
+
+The diagnostic problem sensor exposes invalid/unavailable selected targets and the latest failed execution. Its attributes list the explicit selection and `deadline_scope: selected_group`. With the `last` policy, a later selected-device activation moves the group deadline; this is not a separate maximum timer per device. Unselected area devices are never automatically added. The diagnostics also expose whether a timer is armed.

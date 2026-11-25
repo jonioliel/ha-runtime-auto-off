@@ -122,6 +122,9 @@
     "binary_sensor": {
       "any_active": {
         "name": "Any selected entity active"
+      },
+      "problem": {
+        "name": "Problem"
       }
     },
     "sensor": {

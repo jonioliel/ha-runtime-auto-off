@@ -122,6 +122,9 @@
     "binary_sensor": {
       "any_active": {
         "name": "רכיב נבחר כלשהו פעיל"
+      },
+      "problem": {
+        "name": "תקלה בכלל הכיבוי"
       }
     },
     "sensor": {

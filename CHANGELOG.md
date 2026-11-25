@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.3
+
+- Retry an unconfirmed shutdown once immediately when the original device state and all safety conditions still hold; otherwise retain the configured retry schedule.
+- Recover pending retries after failed execution-boundary storage and unexpected execution errors.
+- Add a diagnostic problem sensor with selected-target issues, latest command failures, and group deadline policy.
+
 ## [1.4.2] - 2026-11-02
 
 - Wait up to five seconds for asynchronously reported `off` states after service
