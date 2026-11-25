@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -24,6 +25,9 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.runtime_auto_off.binary_sensor import (
+    RuntimeAutoOffProblemBinarySensor,
+)
 from custom_components.runtime_auto_off.controller import RuntimeAutoOffController
 from custom_components.runtime_auto_off.models import (
     RuleConfig,
@@ -515,6 +519,31 @@ async def test_unconfirmed_turn_off_is_failed_and_retried(
     assert hass.states.get(LIGHT) is not None
     assert hass.states.get(LIGHT).state == STATE_OFF
     assert controller.deadline is None
+
+
+async def test_problem_sensor_tracks_target_health_and_disabled_rules(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    controller = await controller_factory(_config(entities=(LIGHT,)))
+    sensor = RuntimeAutoOffProblemBinarySensor(
+        SimpleNamespace(
+            entry_id="entry", data={"rule_id": "rule"}, runtime_data=controller
+        )
+    )
+    assert sensor.is_on is False
+    hass.states.async_set(LIGHT, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    assert sensor.is_on is True
+    assert LIGHT in sensor.extra_state_attributes["target_issues"]
+    assert sensor.extra_state_attributes["selected_entities"] == [LIGHT]
+    assert sensor.extra_state_attributes["deadline_scope"] == "selected_group"
+    await controller.async_set_enabled(False)
+    assert sensor.is_on is False
+    hass.states.async_set(LIGHT, STATE_OFF)
+    await controller.async_set_enabled(True)
+    assert sensor.is_on is False
 
 
 async def test_missed_command_gets_one_immediate_retry(
