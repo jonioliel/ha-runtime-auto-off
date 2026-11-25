@@ -541,6 +541,66 @@ async def test_missed_command_gets_one_immediate_retry(
     assert controller.deadline is None
 
 
+@pytest.mark.parametrize("change", ["gate", "device", "disable"])
+async def test_changed_conditions_prevent_immediate_retry(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+    change: str,
+) -> None:
+    hass.states.async_set(SHABBAT, STATE_OFF)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=60, entities=(LIGHT,), shabbat_entity=SHABBAT)
+    )
+
+    async def changed_during_command(call: ServiceCall) -> None:
+        turn_off_recorder.calls.append(call.data[ATTR_ENTITY_ID])
+        if change == "gate":
+            hass.states.async_set(SHABBAT, STATE_ON)
+        elif change == "device":
+            hass.states.async_set(LIGHT, STATE_ON, {"brightness": 100})
+        else:
+            controller.async_inhibit_actions()
+
+    hass.services.async_register("light", SERVICE_TURN_OFF, changed_during_command)
+    assert controller.deadline is not None
+    async_fire_time_changed(hass, controller.deadline + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    assert turn_off_recorder.calls == [LIGHT]
+
+
+async def test_unexpected_confirmation_failure_rearms_retry(
+    hass: HomeAssistant,
+    controller_factory: ControllerFactory,
+    turn_off_recorder: TurnOffRecorder,
+) -> None:
+    turn_off_recorder.ignored.add(LIGHT)
+    hass.states.async_set(LIGHT, STATE_ON)
+    controller = await controller_factory(
+        _config(delay=60, retry_interval=30, entities=(LIGHT,))
+    )
+    deadline = controller.deadline
+    assert deadline is not None
+    assert controller._unsub_deadline is not None
+    controller._unsub_deadline()
+    with (
+        patch.object(
+            controller,
+            "_async_confirm_turn_off",
+            AsyncMock(side_effect=RuntimeError("confirmation error")),
+        ),
+        pytest.raises(RuntimeError, match="confirmation error"),
+    ):
+        await controller._async_deadline_reached(
+            controller._timer_generation, deadline + timedelta(seconds=1)
+        )
+    assert controller.deadline is not None
+    assert controller.deadline > deadline
+    assert controller.last_execution is not None
+    assert controller.last_execution.failed_entities == {LIGHT: "execution_interrupted"}
+
+
 async def test_lost_execution_claim_sends_no_command_and_rearms(
     hass: HomeAssistant,
     controller_factory: ControllerFactory,

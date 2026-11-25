@@ -624,8 +624,8 @@ class RuntimeAutoOffController:
         try:
             async with self._execution_lock:
                 await self._async_execute_serialized(plan)
-        except (asyncio.CancelledError, Exception):
-            # A cancelled service/confirmation must not leave durable claims
+        except (asyncio.CancelledError, Exception) as err:
+            # An interrupted service/confirmation must not leave durable claims
             # permanently handled with no retry timer in the live controller.
             async with self._lock:
                 now = max(dt_util.utcnow(), plan.claimed_at)
@@ -643,6 +643,20 @@ class RuntimeAutoOffController:
                         self._schedule_deadline_locked(now)
                     if activity is not None:
                         self._publish_activity(activity)
+                self._last_execution = LastExecution(
+                    trigger_entity=plan.trigger_entity,
+                    occurred_at=now,
+                    successful_entities=(),
+                    skipped_entities={},
+                    failed_entities={
+                        entity_id: (
+                            "execution_cancelled"
+                            if isinstance(err, asyncio.CancelledError)
+                            else "execution_interrupted"
+                        )
+                        for entity_id in plan.target_entities
+                    },
+                )
                 try:
                     await self._async_save_locked(force=True)
                 except Exception:
